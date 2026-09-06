@@ -25,3 +25,8 @@ Thumbs.db
 # 本地缓存与加密密钥
 data/cache/
 data/.key
+
+# 真实简历不入库（样例简历白名单放行）
+data/resumes/*
+!data/resumes/简历_李明_数据分析师.pdf
+!data/resumes/简历_李明_数据分析师.txt

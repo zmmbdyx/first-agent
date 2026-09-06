@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="求职智囊 Agent — 自主拆解任务、调用工具的 AI 求职助手">
+  <title>求职智囊 Agent</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="module" src="/static/js/app.js"></script>
+</head>
+<body>
+  <!-- ======= 顶栏 ======= -->
+  <header class="topbar">
+    <button id="burger" class="icon-btn" aria-label="折叠或展开侧边栏">☰</button>
+    <div class="brand">
+      <span class="brand-logo" aria-hidden="true">🧭</span>
+      <span>求职智囊 <em>Agent</em></span>
+    </div>
+    <div class="top-chips">
+      <select id="modelSelect" class="chip chip-btn" aria-label="切换模型" title="切换模型（对新消息生效）"></select>
+      <span id="chipProvider" class="chip">加载中…</span>
+      <span id="chipSession" class="chip hide-sm">会话 -</span>
+    </div>
+  </header>
+
+  <!-- ======= 两栏骨架：左侧抽屉（工作流/记忆/简历库） + 主对话 ======= -->
+  <div class="layout">
+    <!-- 左侧抽屉：三个 Tab -->
+    <aside id="sidebar" aria-label="Agent 面板">
+      <nav class="sb-tabs" aria-label="面板切换">
+        <button class="sb-tab active" data-tab="wf" aria-label="工作流">⚡<span class="txt">工作流</span></button>
+        <button class="sb-tab" data-tab="mem" aria-label="Agent 记忆">🧠<span class="txt">记忆</span></button>
+        <button class="sb-tab" data-tab="resume" aria-label="简历库">📄<span class="txt">简历库</span></button>
+        <button id="sbExpand" class="sb-tab sb-expand" aria-label="展开侧边栏" title="展开">»</button>
+      </nav>
+
+      <div class="sb-body">
+        <!-- Tab 1：工作流 -->
+        <section id="tab-wf" class="sb-pane active" aria-label="工作流">
+          <div class="wf-head">
+            <h3>⚡ 工作流 <span class="dot" id="statusDot"></span><span id="statusText" class="wf-status">空闲</span><span id="statusSub" class="wf-status"></span></h3>
+            <div class="goal empty" id="goalText">输入求职目标后，Agent 的规划与执行将实时展示在这里</div>
+            <div class="pbar"><i id="progressBar"></i></div>
+            <div class="pmeta"><span id="progressText">0 / 0</span><span id="flowNote"></span></div>
+          </div>
+          <div id="tasks"><div class="tasksEmpty">尚无任务<br>发送目标后，Agent 的规划与执行将实时展示</div></div>
+          <div id="progressNote" class="pmeta" style="padding:0 14px 10px"></div>
+        </section>
+
+        <!-- Tab 2：Agent 记忆 -->
+        <section id="tab-mem" class="sb-pane" aria-label="Agent 记忆">
+          <div class="side-sec">
+            <h3>画像与进度 <button id="btnClearMem" class="link-btn" aria-label="清除本地记忆">清除记忆</button></h3>
+            <div id="memChips"><div class="memEmpty">暂无记忆条目，对话中会自动记录</div></div>
+            <div class="statRow">
+              <div class="stat"><b id="stLlm">0</b><span>LLM调用</span></div>
+              <div class="stat"><b id="stTool">0</b><span>工具调用</span></div>
+              <div class="stat"><b id="stRetry">0</b><span>自动重试</span></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tab 3：简历库 -->
+        <section id="tab-resume" class="sb-pane" aria-label="简历库">
+          <div class="side-sec">
+            <div id="dropZone" role="button" tabindex="0" aria-label="上传简历，拖拽或点击选择">
+              将简历拖到这里，或点击选择<br><span style="font-size:11px">pdf / docx / txt / md · 上传后点「使用」</span>
+            </div>
+            <div id="resumeList"></div>
+          </div>
+        </section>
+      </div>
+    </aside>
+    <div id="drawerMask"></div>
+
+    <!-- 主对话区 -->
+    <main id="chatPane" class="pane" aria-label="对话区">
+      <div class="chat-toolbar">
+        <span id="chipSession" class="chip hide-sm">会话 -</span>
+        <button id="btnClearChat" class="link-btn danger-link" aria-label="清空聊天记录">🗑 清空聊天记录</button>
+      </div>
+      <div class="chat-banners">
+        <div id="securityBanner" class="banner banner-danger" role="alert">
+          <span class="banner-text">⚠️ 检测到敏感信息已拦截，请勿发送身份证号/银行卡等隐私内容</span>
+        </div>
+        <div id="askBanner" class="banner banner-warn">
+          ⏸ <b>Agent 等待你的补充信息</b> —— 在下方输入后发送，工作流自动恢复
+        </div>
+        <div id="ocrTip" class="banner banner-info"></div>
+        <div id="offlineBar" role="alert">
+          ⚡ 连接断开，已保留上下文 <button id="btnReconnect">重新连接</button>
+        </div>
+      </div>
+      <section id="messages" aria-live="polite" aria-label="聊天记录"></section>
+
+      <div id="dropMask" aria-hidden="true">松手即可处理 · 图片→OCR / 简历→入库 / 文档→分析</div>
+
+      <footer class="input-dock">
+        <div class="input-glass">
+          <button id="clip" aria-label="选择图片或文档" title="选择图片(JD截图)或简历/文档">📎</button>
+          <textarea id="input" rows="1" placeholder="输入目标，或直接 Ctrl+V 粘贴 JD 截图…"
+                    aria-label="输入求职目标"></textarea>
+          <button id="send" aria-label="发送消息">发送 ➤</button>
+        </div>
+        <p class="hint">Enter 发送 · Shift+Enter 换行 · 支持粘贴截图 / 拖入简历与 JD 文件</p>
+      </footer>
+      <input type="file" id="filePick" hidden multiple
+             accept=".png,.jpg,.jpeg,.webp,.bmp,.pdf,.docx,.txt,.md" aria-hidden="true">
+    </main>
+  </div>
+
+  <!-- ======= 抽屉遮罩（移动端） / Toast ======= -->
+  <div id="drawerMask"></div>
+  <div id="toasts" aria-live="polite"></div>
+  <input type="file" id="resumePick" hidden multiple accept=".pdf,.docx,.txt,.md" aria-hidden="true">
+</body>
+</html>

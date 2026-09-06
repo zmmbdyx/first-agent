@@ -1,0 +1,24 @@
+name: CI
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+      - name: 冒烟测试（强制mock离线，含故障注入/OCR/加密/缓存/对抗样本）
+        run: python tests/test_smoke.py
+      - name: 批量评测回归（mock，对比匹配分无异常波动）
+        run: python tests/batch_eval.py --mock
+      - name: 密钥泄露扫描
+        run: |
+          ! grep -rEl "sk-[a-zA-Z0-9]{20,}" --include="*.py" --include="*.md" --include="*.html" --include="*.yml" .

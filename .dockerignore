@@ -1,0 +1,10 @@
+.env
+.git
+__pycache__
+*.pyc
+data/sessions
+data/sessions_*
+data/uploads
+data/reports
+data/test_ocr.png
+README.md

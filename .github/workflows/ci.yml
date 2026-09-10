@@ -9,6 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 脱敏审计要扫全历史，必须取完整历史（默认只取最后一次提交）
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -17,8 +20,12 @@ jobs:
         run: pip install -r requirements.txt
       - name: 冒烟测试（强制mock离线，含故障注入/OCR/加密/缓存/对抗样本）
         run: python tests/test_smoke.py
+      - name: 结构化校验测试（规划/ReAct 决策的 Pydantic 边界与降级）
+        run: python tests/test_schemas.py
       - name: 批量评测回归（mock，对比匹配分无异常波动）
         run: python tests/batch_eval.py --mock
-      - name: 密钥泄露扫描
-        run: |
-          ! grep -rEl "sk-[a-zA-Z0-9]{20,}" --include="*.py" --include="*.md" --include="*.html" --include="*.yml" .
+      - name: 脱敏审计（密钥 / 私有端点 / 个人敏感信息）
+        # 旧实现是 `grep -E "sk-[a-zA-Z0-9]{20,}"`：只扫工作树、漏历史，且会误报
+        # tests/test_smoke.py 里用于验证"密钥脱敏"的假密钥字面量，导致该步骤恒失败。
+        # 改用带白名单且覆盖全历史的审计脚本。
+        run: python scripts/audit_secrets.py --repo .

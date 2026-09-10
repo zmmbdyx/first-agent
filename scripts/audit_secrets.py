@@ -42,7 +42,7 @@ PATTERNS: list[tuple[str, re.Pattern]] = [
     ("JWT", re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),
     ("私钥文件内容", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("URL 内嵌密码", re.compile(r"://[^/\s:@]{3,}:[^/\s:@]{3,}@")),
-    ("私有推理端点", re.compile(r"ws-[a-z0-9]{10,}\.[a-z0-9\-]*\.?(?:maas\.)?generic-endpoint\.com")),
+    ("私有推理端点", re.compile(r"\\bws-[a-z0-9]{10,}\\.[a-z0-9.\-]+\\.[a-z]{2,}\\b")),
     ("内网 IP", re.compile(
         r"(?<![\d.])(?:10\.\d{1,3}|192\.168\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3})"
         r"\.\d{1,3}(?![\d.])")),

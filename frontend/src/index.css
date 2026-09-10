@@ -1,0 +1,217 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   设计令牌：极简黑白灰 · 深色默认 · 小圆角 · 高信息密度
+   深/浅色只切换变量值，组件层不出现任何硬编码颜色
+   ========================================================================== */
+:root {
+  --pf-bg: #ffffff;
+  --pf-bg-elevated: #fafafa;
+  --pf-surface: #f4f4f5;
+  --pf-surface-hover: #ededee;
+  --pf-border: #e4e4e7;
+  --pf-border-strong: #d4d4d8;
+  --pf-text: #18181b;
+  --pf-text-muted: #52525b;
+  --pf-text-faint: #a1a1aa;
+  --pf-accent: #18181b;
+  --pf-accent-text: #fafafa;
+  --pf-ok: #3f6212;
+  --pf-warn: #854d0e;
+  --pf-err: #991b1b;
+  --pf-info: #334155;
+  --pf-scrollbar: #d4d4d8;
+  /* 遮罩层：Tailwind 的 `bg-pf-bg/70` 无法对 var() 做 alpha 合成（不生成规则），
+     因此透明度在这里用 rgba 直接表达，组件只写 .pf-scrim */
+  --pf-scrim: rgba(24, 24, 27, 0.42);
+}
+
+.dark {
+  --pf-bg: #0b0b0c;
+  --pf-bg-elevated: #121213;
+  --pf-surface: #17171a;
+  --pf-surface-hover: #1f1f23;
+  --pf-border: #26262a;
+  --pf-border-strong: #35353b;
+  --pf-text: #ededf0;
+  --pf-text-muted: #9a9aa3;
+  --pf-text-faint: #62626b;
+  --pf-accent: #ededf0;
+  --pf-accent-text: #0b0b0c;
+  --pf-ok: #a3c98a;
+  --pf-warn: #d8b26a;
+  --pf-err: #e08a8a;
+  --pf-info: #9fb3c8;
+  --pf-scrollbar: #35353b;
+  --pf-scrim: rgba(0, 0, 0, 0.62);
+}
+
+* {
+  border-color: var(--pf-border);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  font-size: 13px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 细滚动条：开发工具观感 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--pf-scrollbar);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--pf-border-strong);
+}
+
+::selection {
+  background: var(--pf-border-strong);
+}
+
+input,
+textarea,
+button,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+textarea {
+  resize: none;
+}
+
+:focus-visible {
+  outline: 1px solid var(--pf-border-strong);
+  outline-offset: 1px;
+}
+
+@layer components {
+  /* 面板与卡片 */
+  .pf-card {
+    @apply rounded-md border border-pf-border bg-pf-elevated;
+  }
+  .pf-btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded border border-pf-border
+           px-2 py-1 text-xs text-pf-muted transition-colors hover:bg-pf-surface-hover
+           hover:text-pf-text disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .pf-btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded bg-pf-accent px-2 py-1
+           text-xs font-medium text-pf-accent-text transition-opacity
+           hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .pf-btn-ghost {
+    @apply inline-flex items-center justify-center rounded p-1 text-pf-muted
+           transition-colors hover:bg-pf-surface-hover hover:text-pf-text;
+  }
+  .pf-input {
+    @apply w-full rounded border border-pf-border bg-pf-bg px-2 py-1 text-xs text-pf-text
+           placeholder:text-pf-faint focus:border-pf-border-strong focus:outline-none;
+  }
+  .pf-tag {
+    @apply inline-flex items-center gap-1 rounded border border-pf-border px-1.5 py-0.5
+           font-mono text-2xs text-pf-muted;
+  }
+  .pf-label {
+    @apply text-2xs uppercase tracking-wide text-pf-faint;
+  }
+  /* 轨迹读条：以灰度明度区分节点阶段，状态另用语义色描边 */
+  .pf-bar {
+    @apply relative h-1.5 flex-1 cursor-pointer overflow-hidden rounded-sm transition-all;
+    background: var(--pf-surface);
+  }
+  /* 弹窗遮罩：见 :root 里 --pf-scrim 的说明 */
+  .pf-scrim {
+    background: var(--pf-scrim);
+  }
+  .pf-bar:hover {
+    filter: brightness(1.25);
+  }
+}
+
+/* Markdown 正文：紧凑排版，避免报告把界面撑散 */
+.pf-md {
+  @apply text-base leading-relaxed text-pf-text;
+}
+.pf-md > *:first-child {
+  margin-top: 0;
+}
+.pf-md h1,
+.pf-md h2,
+.pf-md h3,
+.pf-md h4 {
+  @apply mb-2 mt-4 font-semibold text-pf-text;
+}
+.pf-md h1 {
+  @apply text-md;
+}
+.pf-md h2 {
+  @apply text-base;
+}
+.pf-md h3 {
+  @apply text-base text-pf-muted;
+}
+.pf-md p {
+  @apply my-2;
+}
+.pf-md ul,
+.pf-md ol {
+  @apply my-2 space-y-1 pl-5;
+}
+.pf-md ul {
+  @apply list-disc;
+}
+.pf-md ol {
+  @apply list-decimal;
+}
+.pf-md a {
+  @apply text-pf-text underline decoration-pf-border-strong underline-offset-2;
+}
+.pf-md code {
+  @apply rounded bg-pf-surface px-1 py-0.5 font-mono text-xs;
+}
+.pf-md pre {
+  @apply my-2 overflow-x-auto rounded-md border border-pf-border bg-pf-surface p-2.5;
+}
+.pf-md pre code {
+  @apply bg-transparent p-0 text-xs;
+}
+.pf-md blockquote {
+  @apply my-2 border-l-2 border-pf-border-strong pl-3 text-pf-muted;
+}
+.pf-md table {
+  @apply my-2 w-full border-collapse text-xs;
+}
+.pf-md th,
+.pf-md td {
+  @apply border border-pf-border px-2 py-1 text-left;
+}
+.pf-md th {
+  @apply bg-pf-surface font-medium text-pf-muted;
+}
+.pf-md hr {
+  @apply my-3 border-t border-pf-border;
+}
+.pf-md img {
+  @apply my-2 max-w-full rounded border border-pf-border;
+}

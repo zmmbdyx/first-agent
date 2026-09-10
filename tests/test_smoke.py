@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend"))  # 新布局：应用代码在 backend/
 
 import os
 import shutil  # noqa: E402
@@ -16,8 +16,8 @@ from config import load_config  # noqa: E402
 from core.llm import extract_json  # noqa: E402
 from core.agent import JobAgent  # noqa: E402
 from core.memory import Task  # noqa: E402
-from tools.jd_analyze import analyze_jd_text  # noqa: E402
-from tools.resume_match import compute_match  # noqa: E402
+from core.tools.jd_analyze import analyze_jd_text  # noqa: E402
+from core.tools.resume_match import compute_match  # noqa: E402
 
 PASS = []
 
@@ -103,7 +103,7 @@ def main():
     check("恢复后执行完成", session2.status == "done" and "final_answer" in [e["type"] for e in events2])
 
     print("== 7. 错误处理与重试（故障注入） ==")
-    from tools.base import ToolError
+    from core.tools.base import ToolError
     session3 = memory.new_session()
     events3 = []
     agent.bus.subscribe(events3.append)
@@ -165,7 +165,7 @@ def main():
         check("docx简历解析", False, f"{type(e).__name__}: {e}")
 
     print("== 9. 简历库默认简历发现 ==")
-    from tools.file_tools import default_resume_path
+    from core.tools.file_tools import default_resume_path
     try:
         dp = default_resume_path()
         check("默认简历发现", bool(dp), dp)
@@ -300,10 +300,10 @@ def main():
 
     print("== 17. 输出脱敏（注入防护输出侧） ==")
     leak = ("这是密钥sk-abcdefghijklmnop1234请查收，"
-            "端点https://REDACTED")
+            "端点https://llm-internal.example.com/v1/chat/completions")
     clean = agent._sanitize_output(leak)
     check("密钥脱敏", "sk-abcdefghijklmnop1234" not in clean and "[已脱敏]" in clean)
-    check("端点脱敏", "generic-endpoint" not in clean)
+    check("端点脱敏", "llm-internal" not in clean)
     check("正常内容不受影响", "匹配分88.3" in agent._sanitize_output("匹配分88.3，建议优化简历"))
 
     print("== 18. 意图分类前置（情绪/闲聊不跑流水线） ==")

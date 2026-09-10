@@ -1,0 +1,6 @@
+# 生产 PostgreSQL 驱动（本地开发用 SQLite 时无需安装）
+# 安装：pip install -r requirements-postgres.txt
+psycopg[binary]>=3.1
+
+# 异步驱动（可选：使用 async SQLAlchemy 会话时安装）
+# asyncpg>=0.29

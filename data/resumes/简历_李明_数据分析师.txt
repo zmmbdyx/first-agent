@@ -15,7 +15,7 @@
 【项目经历】
 1. 销量预测模型（机器学习课程项目）：使用Python+scikit-learn（XGBoost）预测商品周销量，MAPE降低15%；
 2. 评论情感分析（毕业设计）：Python爬虫采集10万条评论，jieba分词+NLP情感分类，准确率86%；
-3. 大模型应用学习项目：基于OpenAI接口开发RAG知识库问答Demo（LangChain+向量检索）。
+3. 大模型应用学习项目：基于大模型接口开发 RAG 知识库问答 Demo（检索增强 + 向量检索）。
 
 【技能清单】
 - 数据分析：SQL（熟练）、Python（pandas/numpy）、Excel（熟练）、统计学基础

@@ -794,7 +794,7 @@
     },
     "execution_notes": [
       "expected_tool_calls 中 \"<占位>\" 表示参数来自上一步产物（执行器 artifacts 接线），eval 比对时应校验依赖来源而非字面量",
-      "异常类用例需在 测试框架 中 mock 工具故障（monkeypatch registry），security 类需检查 security_block 事件与输出脱敏",
+      "异常类用例需在测试框架中 mock 工具故障（monkeypatch registry），security 类需检查 security_block 事件与输出脱敏",
       "并发用例 G04 需并行发送两个独立 session 的请求"
     ]
   }

@@ -1,14 +1,14 @@
 # 求职智囊 Agent · 系统完善度评估报告（v2 复评）
 
 > 本轮为改进后复评。上一轮评估（74分）提出的 Top5 改进项已全部实施，本轮以
-> **5 条真实场景并行实测（真实 LLM generic3.5-omni-plus）+ 77 项回归测试 + 代码审查**重新取证打分。
+> **5 条真实场景并行实测（真实 LLM，通用兼容协议端点）+ 77 项回归测试 + 代码审查**重新取证打分。
 > 上一轮报告见 EVALUATION.md。
 
 ## 0. 系统信息
 
 - **系统名称**：求职智囊 Agent
 - **核心能力**：JD 截图 OCR 分析、简历解析与加权匹配、面试题生成、薪资谈判建议、情绪支持、跨会话画像记忆
-- **技术栈**：Python 3.14 + FastAPI(SSE) + OpenAI 兼容多模型（generic3.5-omni-plus 等）+ 原生 JS 零构建前端 + Fernet 加密存储
+- **技术栈**：Python 3.14 + FastAPI(SSE) + 通用兼容协议多模型端点+ 原生 JS 零构建前端 + Fernet 加密存储
 - **工具（9个）**：web_search / web_fetch / pdf_extract / docx_extract / image_ocr / jd_analyze / resume_match / write_report / file_read
 - **已实现**：任务规划与 ReAct 执行、条件分支规划、ask_user 挂起恢复、跨会话长期记忆（加密）、意图分类前置（情绪/闲聊路由）、敏感拦截、输出脱敏、双缓存、模型降级、多模型切换、隐私模式、77 项回归测试 + CI
 - **已知短板**：无投递类外部动作工具；无持久化执行日志与监控；输入侧注入防护为声明式

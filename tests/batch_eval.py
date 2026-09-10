@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend"))  # 新布局：应用代码在 backend/
 
 import pandas as pd  # noqa: E402
 import matplotlib  # noqa: E402

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend"))  # 新布局：应用代码在 backend/
 os.environ["LLM_PROVIDER"] = "mock"
 
 from config import load_config  # noqa: E402

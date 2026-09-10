@@ -10,6 +10,7 @@ from config import Config, load_config
 from core import cache as disk_cache
 from core import profile as profile_store
 from core.memory import Memory, Session, Task
+from core.schemas import validate_react_decision
 from core.prompts import (PERSONA_RULES, REACT_SYSTEM, SYNTHESIZE_SYSTEM,
                           FACT_EXTRACT_SYSTEM, ASK_USER_GUIDE,
                           CLASSIFY_SYSTEM, EMOTION_SUPPORT)
@@ -354,35 +355,30 @@ class JobAgent:
                 task.status, task.error = "failed", f"执行器决策失败: {e}"
                 self.bus.emit("task_finish", task_id=task.id, status="failed", error=task.error)
                 return
-            # 改动：模型输出的结构不做校验时，若返回 {"action": "xxx"} 或
-            # {"action": {"args": "path=x"}}，下面的 .get()/dict() 会抛
-            # AttributeError/ValueError 并击穿 handle_message 的兜底 except，
-            # 导致整轮会话中断（而不是仅这一步失败）。这里统一收敛为安全的默认值。
-            if not isinstance(decision, dict):
-                decision = {}
-            action = decision.get("action")
-            if not isinstance(action, dict):
-                action = {}
-            raw_args = action.get("args")
-            tool = str(action.get("tool") or "none").strip().lower()
-            args = dict(raw_args) if isinstance(raw_args, dict) else {}
-            thought = str(decision.get("thought") or "")[:300]
+            # Pydantic 边界校验：LLM 输出是不可信输入。旧实现只在下面用
+            # .get()/dict() 兜底，遇到 {"action": "write_report"}（字符串而非对象）
+            # 或 {"action": {"args": "path=x"}} 这类结构错位仍会抛异常并击穿会话。
+            # 统一经 ReactDecisionSchema 归一化后，此处拿到的字段类型必定合法。
+            d = validate_react_decision(decision)
+            tool = (d.action.tool or "none").strip().lower()
+            args = dict(d.action.args or {})
+            thought = d.thought[:300]
             self.bus.emit("thought", task_id=task.id, step=step, thought=thought)
 
             if tool in NON_TOOLS:
-                final_text = str(decision.get("final") or "").strip()
+                final_text = (d.final or "").strip()
                 if not final_text:
                     final_text = self._task_answer(session, task, observation=last_obs)
                 break
 
             if tool == "fail":  # 执行器判定任务无法完成（工具重试耗尽/材料缺失）
                 task.status = "failed"
-                task.error = str(action.get("reason") or decision.get("final") or "执行器判定失败")
+                task.error = str(d.action.reason or d.final or "执行器判定失败")
                 self.bus.emit("task_finish", task_id=task.id, status="failed", error=task.error[:300])
                 return
 
             if tool == "ask_user":
-                q = str(action.get("question") or "").strip() or ASK_USER_GUIDE
+                q = str(d.action.question or "").strip() or ASK_USER_GUIDE
                 task.status = "waiting"
                 session.status = "awaiting_input"
                 session.pending_question = q

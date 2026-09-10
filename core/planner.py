@@ -65,38 +65,27 @@ def build_fallback_plan(facts: dict, cfg: Config) -> Tuple[str, List[Task]]:
     return f"分析「{role}」JD并匹配简历、产出优化建议与面试题清单", tasks
 
 
-def validate_plan(data: dict, cfg: Config) -> List[Task]:
-    if not isinstance(data, dict) or not isinstance(data.get("tasks"), list) or not data["tasks"]:
-        raise ValueError("计划缺少 tasks 列表")
-    tasks, ids = [], set()
-    for i, t in enumerate(data["tasks"][: cfg.max_tasks]):
-        if not isinstance(t, dict) or not t.get("title"):
-            raise ValueError(f"第{i}个子任务格式非法")
-        tid = str(t.get("id") or f"t{i + 1}")
-        if tid in ids:
-            raise ValueError(f"任务id重复: {tid}")
-        ids.add(tid)
-        deps = [str(d) for d in (t.get("depends_on") or []) if d]
-        tasks.append(Task(id=tid, title=str(t["title"])[:60], detail=str(t.get("detail") or "")[:300],
-                          tool=str(t.get("tool") or "none"), args=t.get("args") or {},
-                          depends_on=deps, condition=t.get("condition") or {}))
-    for t in tasks:  # 依赖必须存在且无环（拓扑序由执行器保证，这里只查引用）
-        bad = [d for d in t.depends_on if d not in ids]
-        if bad:
-            raise ValueError(f"任务 {t.id} 依赖不存在: {bad}")
-    # 改动：原实现只校验依赖「引用存在」，不查环。出现 t1↔t2 互依赖时两者永远不会
-    # 进入 runnable 队列，会以 pending 状态残留（报告里出现"僵尸任务"）；这里做一次
-    # 拓扑可达性检查，有环即判计划非法，由 _make_plan 回退到确定性模板计划。
-    resolved, progress = set(), True
-    while progress:
-        progress = False
-        for t in tasks:
-            if t.id not in resolved and all(d in resolved for d in t.depends_on):
-                resolved.add(t.id)
-                progress = True
-    if len(resolved) != len(tasks):
-        cycle = ", ".join(t.id for t in tasks if t.id not in resolved)
-        raise ValueError(f"任务依赖存在环（永远无法执行）: {cycle}")
+def validate_plan(data: dict, cfg: Config, known_tools: set[str] | None = None) -> List[Task]:
+    """校验 LLM 规划输出并转换为内部 Task 列表；非法时抛 ValueError。
+
+    校验交由 Pydantic（core/schemas.py）完成——类型、长度、取值、依赖存在性、
+    依赖环、id 唯一性都在边界处一次性挡掉。这里只负责：把校验通过的
+    PlanSchema 适配成执行器使用的 dataclass Task。
+
+    known_tools: 注册表里的合法工具名；用于把模型偶发的工具名拼写偏差降级为
+    "由模型直接作答"（tool=none），而不是让整份计划作废。
+    """
+    from core.schemas import validate_plan_dict
+
+    if known_tools is None:
+        known_tools = set(getattr(cfg, "known_tools", None) or [])
+    plan = validate_plan_dict(data, known_tools=known_tools or None, max_tasks=cfg.max_tasks)
+    if plan is None:
+        raise ValueError("计划校验未通过（结构非法、任务为空、id 重复、依赖缺失或存在依赖环）")
+
+    tasks = [Task(id=t.id, title=t.title[:60], detail=t.detail[:300], tool=t.tool,
+                  args=t.args, depends_on=list(t.depends_on), condition=t.condition)
+             for t in plan.tasks]
     return tasks
 
 
@@ -107,7 +96,7 @@ def plan_with_llm(llm, registry: ToolRegistry, facts: dict, user_msg: str,
     data = llm.chat_json([{"role": "system", "content": system},
                           {"role": "user", "content": material}], purpose="plan")
     goal = str(data.get("goal") or user_msg[:80])
-    return goal, validate_plan(data, cfg)
+    return goal, validate_plan(data, cfg, known_tools=set(registry.tools.keys()))
 
 
 PATH_RE = re.compile(

@@ -99,6 +99,7 @@ Agent 内置「求职智囊」人设（`core/prompts.py` 的 PERSONA_RULES，注
 | **简历库管理** | 右上角「简历库」面板：**拖拽/点击上传**多份简历（pdf/docx/txt/md）、一键切换「使用中」的简历、删除；选中的简历随消息生效，未选择时自动用最新上传的一份 |
 | **工作流可视化** | 任务卡片实时展示规划→思考💭→工具调用→结果，进度条、重试徽章🔁、失败❌、等待⏸；左侧渲染最终 markdown 报告与匹配图表 |
 | **错误处理与重试** | LLM 指数退避重试×3 + JSON 输出解析失败自动修复×2；工具统一重试×2；单任务连续失败熔断；依赖失败自动传播；执行器可宣告 `fail` 降级。故障注入测试见 `tests/test_smoke.py` 第7节 |
+| **结构化输出校验（Pydantic）** | `core/schemas.py`：LLM 输出作为**不可信输入**在边界处统一校验。规划侧校验类型/长度/id 唯一/依赖存在/依赖无环，非法即回退确定性模板计划；执行侧把 `{"action": "write_report"}`（字符串而非对象）等结构错位**归一化**为合法结构——这类输入在旧实现里会抛 AttributeError 并击穿整个会话。未知工具名降级为 `none` 而非作废整份计划 |
 | **真实数据测试** | `tests/batch_eval.py`：10 个真实风格 JD 全链路自动跑批 → `data/reports/batch_report.md` + 10 份独立报告 + 10 张匹配图表 + 汇总CSV/总览图 |
 
 ## 架构
@@ -109,9 +110,10 @@ Agent 内置「求职智囊」人设（`core/prompts.py` 的 PERSONA_RULES，注
         ▼
 JobAgent 编排器 (core/agent.py)
  ├─ ① 记忆更新：正则+LLM 抽取事实（岗位/城市/文件）→ Session.facts
- ├─ ② 任务规划：LLM 规划(JSON校验) / 兜底模板规划 ──> 事件 plan_created
+ ├─ ② 任务规划：LLM 规划 → **Pydantic 校验**（类型/id唯一/依赖存在/无环）→ 非法回退模板 ──> 事件 plan_created
  ├─ ③ 逐任务 ReAct 执行
  │      思考 → 选工具 → registry.call（重试/退避）→ 观察 → …
+ │      **每步决策经 Pydantic 归一化**（字符串 action / 坏 args 都不再击穿会话）
  │      工具产物自动接线（OCR/PDF/文本 → jd_analyze → resume_match → 报告）
  │      ask_user → 会话挂起，用户回复后自动恢复（重新规划）
  ├─ ④ 综合报告 → markdown 落盘 data/reports/
@@ -143,7 +145,8 @@ python server.py            # 打开 http://127.0.0.1:8000
 ```bash
 python main.py "帮我分析 data/jds/jd03_数据分析师.txt，匹配简历并给面试题"   # 单轮
 python main.py                                                              # 交互
-python tests/test_smoke.py     # 39项冒烟测试（含OCR/docx与故障注入）
+python tests/test_smoke.py     # 77项冒烟测试（含OCR/docx与故障注入）
+python tests/test_schemas.py   # 33项结构化校验测试（规划/ReAct 决策的边界与降级）
 python tests/batch_eval.py     # 10个JD批量评测
 ```
 
@@ -215,6 +218,7 @@ docker run -d -p 8000:8000 --env-file .env -v ./data:/app/data ai-job-agent
 ├── main.py              # CLI 入口（交互/单轮/--serve）
 ├── config.py            # LLM 配置自动探测与降级
 ├── core/                # agent编排 / planner规划 / llm客户端 / memory记忆 / prompts
+│   └── schemas.py       #   LLM 结构化输出的 Pydantic 校验（规划/ReAct 决策）
 ├── tools/               # 9个工具（含 image_ocr 截图识别、docx_extract）+ 重试注册表
 ├── static/index.html    # 前端：对话 + 工作流可视化 + 简历库面板 + 截图粘贴
 ├── data/

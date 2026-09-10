@@ -49,7 +49,7 @@ def _t(*parts: str) -> str:
 _VENDORS = [
     _t("deep", "seek"), _t("深度", "求索"), _t("zhi", "pu"), _t("智", "谱"),
     _t("big", "model"), _t("moon", "shot"), _t("ki", "mi"), _t("月之", "暗面"),
-    _t("q", "wen"), _t("通用", "千问"), _t("通", "义"), _t("ali", "yun"),
+    _t("q", "wen"), _t("通", "义", "千问"), _t("通", "义"), _t("ali", "yun"),
     _t("ali", "yun", "cs"), _t("阿里", "云"), _t("百", "炼"), _t("anthro", "pic"),
     _t("clau", "de"), _t("gem", "ini"), _t("mist", "ral"), _t("lla", "ma"),
     _t("x", "ai"), _t("gr", "ok"),
@@ -195,11 +195,39 @@ def scan_history(root: Path) -> list[tuple[str, int, str, str]]:
     return hits
 
 
+def selftest() -> int:
+    """自检：用规则表自身拼出的词逐一验证「每条规则确实能命中」。
+
+    为什么需要：规则表是"片段拼接"的，而历史脱敏替换曾**跨界命中片段**
+    （把 `_t("通义", "千问")` 中的片段改掉），整条模式因此失效、审计却仍然"通过"。
+    本自检不读仓库、不依赖外部文件，纯靠规则表自证，适合作为常驻护栏。
+    """
+    problems: list[str] = []
+    for (category, pattern), words in zip(BRANDS, [_VENDORS, _PRODUCTS, _AGENTS, _SEARCH]):
+        for w in words:
+            if re.search(r"[\\\[\]()*+?{}.|^$]", w):   # 含正则元字符的片段无法还原为字面样本
+                continue
+            if not pattern.search(w):
+                problems.append(f"{category}: {w}")
+    if problems:
+        print(f"❌ 规则自检失败 {len(problems)} 条（模式被削弱或改写）：")
+        for p in problems:
+            print("   -", p)
+        return 1
+    total = sum(len(w) for w in [_VENDORS, _PRODUCTS, _AGENTS, _SEARCH])
+    print(f"✅ 规则自检通过：{total} 个品牌词全部能被对应规则命中")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="第三方品牌字样审计")
     ap.add_argument("--repo", default=".", help="仓库根目录")
     ap.add_argument("--history", action="store_true", help="同时扫描 git 全历史")
+    ap.add_argument("--selftest", action="store_true", help="只做规则表自检（不扫描仓库）")
     args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
 
     root = Path(args.repo).resolve()
     hits = scan_tree(root)

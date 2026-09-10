@@ -57,6 +57,12 @@ LLM 耗时、上下文占用、缓存命中率与输入/输出 Token。
 
 ![浅色模式](./screenshots/04-light.png)
 
+### 5. 右侧详情面板：Git 变更与暂存
+
+由 `scripts/ui_check.py` 在真实点击「勾选 → 暂存」后截图，同时断言了 `/api/git/stage` 的调用与返回。
+
+![Git 面板](./screenshots/05-ui-check.png)
+
 ---
 
 ## 项目介绍
@@ -392,7 +398,8 @@ python backend/cli.py                                                           
 │   ├── EVALUATION.md               #   评测记录
 │   └── EVALUATION_v2.md
 ├── scripts/
-│   ├── smoke_api.py                # 端到端接口冒烟（31 项）
+│   ├── smoke_api.py                # 端到端接口冒烟（32 项）
+│   ├── ui_check.py                 # 交互层实机校验（27 项，Playwright 真实点击）
 │   ├── capture_screenshots.py      # Playwright 截图
 │   ├── audit_secrets.py            # 密钥/隐私审计（含 git 历史）
 │   └── audit_brand.py              # 第三方品牌字样审计
@@ -418,7 +425,10 @@ python tests/batch_eval.py          # 10 份 JD 全链路批量评测
 
 # 端到端接口（含真实 SSE 流与 WebSocket）
 set PYTHONPATH=backend              # Windows；Linux/macOS 用 export
-python scripts/smoke_api.py         # 31 项：契约端点 + 事件序列 + 路径穿越防护
+python scripts/smoke_api.py         # 32 项：契约端点 + 事件序列 + 路径穿越防护
+
+# 交互层实机校验（需后端已启动且前端已构建）
+python scripts/ui_check.py          # 27 项：真实点击侧栏/设置四 Tab/右侧四面板/输入区
 
 # 脱敏与合规审计
 python scripts/audit_secrets.py --repo .    # 密钥/私有端点/个人敏感信息（含全历史）
@@ -428,7 +438,13 @@ python scripts/audit_brand.py --repo .      # 第三方品牌字样（含全历�
 cd frontend && npx tsc --noEmit && npm run build
 ```
 
-CI（`.github/workflows/ci.yml`）分三个作业：后端测试、前端构建与类型检查、脱敏审计。
+CI（`.github/workflows/ci.yml`）分四个作业：后端测试、前端构建与类型检查、交互层实机校验、脱敏审计。
+
+> **为什么需要 `ui_check.py`**：类型检查与构建通过并不代表交互接通——
+> 实测中"打开设置弹窗整页崩成空白"（后端 `/api/health` 返回结构化对象，前端按字符串渲染）
+> 这类缺陷只有在真实点击时才会暴露。该脚本用 DOM 状态 + 网络请求双重断言，
+> 覆盖会话置顶/重命名/删除、设置四 Tab、文件树展开与预览、Git 勾选暂存、
+> `@` 引用浮层、参数下拉、布局折叠与深/浅色切换。
 
 ---
 

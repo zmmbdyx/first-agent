@@ -43,8 +43,11 @@ PATTERNS: list[tuple[str, re.Pattern]] = [
     ("私钥文件内容", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("URL 内嵌密码", re.compile(r"://[^/\s:@]{3,}:[^/\s:@]{3,}@")),
     ("私有推理端点", re.compile(r"\\bws-[a-z0-9]{10,}\\.[a-z0-9.\-]+\\.[a-z]{2,}\\b")),
+    # 注意 lookbehind 里除了数字与点，还排除了 semver 前缀（^ ~ > < = v）：
+    # 依赖清单里的带前缀版本号（如 ^10.x.y）与内网地址在字面上无法区分，前者必然误报。
+    # 真正写在代码/配置里的内网地址不会以这些符号开头，覆盖面几乎不受影响。
     ("内网 IP", re.compile(
-        r"(?<![\d.])(?:10\.\d{1,3}|192\.168\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3})"
+        r"(?<![\d.^~><=v])(?:10\.\d{1,3}|192\.168\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3})"
         r"\.\d{1,3}(?![\d.])")),
     ("内网域名", re.compile(
         r"(?<![.\w])(?!threading|locale|gettext)[a-z0-9\-]{3,}\.(?:internal|corp|intranet)(?![.\w])",
@@ -62,9 +65,19 @@ ALLOW = re.compile(
     # 验证"敏感信息拦截"的假身份证号（tests/test_smoke.py、eval_suite.json）
     r"110101199003077777|"
     # 示例简历里的假联系方式（data/generate_data.py、data/resumes/*）
-    r"liming@email\.com|138\*{4}5678|@email\.com)",
+    r"liming@email\.com|138\*{4}5678|@email\.com|"
+    # 文档/模板里按惯例书写的占位连接串（如 postgresql://user:password@localhost/db）
+    r"://(?:user|username|your_user|root):(?:password|pass|your_password|密码)@|"
+    # docker-compose 的本地开发口令：仅用于本机容器，且可用环境变量覆盖
+    r"pathforge_local_dev)",
     re.I,
 )
+
+# 这些文件里"内网 IP"规则必然是误报：包管理器 lock 文件里到处是 10.x.y 形式的**版本号**，
+# 与内网地址在字面上无法区分（本脚本自身的注释也需避免写出该字面量，否则会自报）。
+LOCKFILES = re.compile(r"(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|poetry\.lock)",
+                       re.I)
+PATH_SKIP_RULES = {"内网 IP"}
 
 # 二进制/大文件不扫描
 SKIP_EXT = re.compile(
@@ -78,10 +91,13 @@ def _git(repo: str, args: list[str]) -> str:
 
 
 def _scan_text(text: str, label: str, findings: dict) -> None:
+    skip_rules = PATH_SKIP_RULES if LOCKFILES.search(label) else set()
     for line in text.splitlines():
         if SKIP_EXT.search(line[:200]):
             continue
         for name, pat in PATTERNS:
+            if name in skip_rules:
+                continue
             for m in pat.finditer(line):
                 val = m.group(0)
                 if ALLOW.search(val) or ALLOW.search(line):

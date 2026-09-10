@@ -14,7 +14,7 @@ import { ApiError, api, useHealth, useModels, usePresets, useRegisterTool, useTo
 import { IconCheck, IconPlus, IconTrash, IconX } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/useAppStore'
-import type { PermissionMode, PresetId, ToolInfo } from '@/types'
+import type { HealthServiceState, PermissionMode, PresetId, ToolInfo } from '@/types'
 
 type TabId = 'general' | 'model' | 'plugins' | 'presets'
 
@@ -36,6 +36,28 @@ function errorText(err: unknown): string {
   if (err instanceof ApiError) return err.message
   if (err instanceof Error) return err.message
   return '未知错误'
+}
+
+/**
+ * 把 `/api/health` 的依赖状态归一成「一行可读文本 + 是否健康」。
+ *
+ * 后端返回的是结构化对象（如 `{dialect:'sqlite', ok:true}`、`{mode:'in-memory', available:false}`），
+ * 早期实现按字符串渲染，直接把对象交给 React 会抛
+ * "Objects are not valid as a React child"，**整页崩成空白**（实测打开设置即复现）。
+ * 这里对 对象 / 字符串 / 布尔 三种形态一律兜住。
+ */
+function describeService(
+  raw: HealthServiceState | string | boolean | undefined,
+  onText = 'ok',
+  offText = '不可用',
+): { value: string; ok: boolean } {
+  if (raw === undefined || raw === null) return { value: '—', ok: false }
+  if (typeof raw === 'string') return { value: raw, ok: raw === 'ok' }
+  if (typeof raw === 'boolean') return { value: raw ? onText : offText, ok: raw }
+  const ok = Boolean(raw.ok ?? raw.available ?? raw.enabled)
+  const bits = [raw.mode, raw.dialect, raw.path].filter(Boolean) as string[]
+  if (bits.length) return { value: bits.join(' · '), ok }
+  return { value: ok ? onText : offText, ok }
 }
 
 /** 开关行：左侧文案 + 右侧方形勾选框（无第三方开关组件） */
@@ -175,10 +197,10 @@ function GeneralTab() {
     ? [
         { label: 'provider', value: health.provider || '—', ok: Boolean(health.provider) },
         { label: 'model', value: health.model || '—', ok: Boolean(health.model) },
-        { label: 'db', value: health.db || '—', ok: health.db === 'ok' },
-        { label: 'redis', value: health.redis || '—', ok: health.redis === 'ok' },
-        { label: 'vector_store', value: health.vector_store || '—', ok: health.vector_store === 'ok' },
-        { label: 'sandbox', value: health.sandbox ? '启用' : '停用', ok: health.sandbox },
+        { label: 'db', ...describeService(health.db) },
+        { label: 'redis', ...describeService(health.redis) },
+        { label: 'vector_store', ...describeService(health.vector_store) },
+        { label: 'sandbox', ...describeService(health.sandbox, '启用', '停用') },
       ]
     : []
 

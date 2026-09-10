@@ -186,16 +186,39 @@ export interface PresetInfo {
   params: Record<string, unknown>
 }
 
+/**
+ * `/api/health` 的依赖状态：后端返回的是**结构化对象**（含 ok/available/enabled/mode 等），
+ * 为兼容只报字符串的实现，这里用联合类型；渲染前必须经 `describeService()` 归一，
+ * 直接把对象交给 React 会抛 "Objects are not valid as a React child" 并整页崩白。
+ */
+export interface HealthServiceState {
+  ok?: boolean
+  available?: boolean
+  enabled?: boolean
+  configured?: boolean
+  mode?: string
+  dialect?: string
+  fallback?: boolean
+  path?: string
+  timeout?: number
+  max_output?: number
+  permission_modes?: string[]
+}
+
 export interface HealthInfo {
   status: string
   provider: string
   model: string
   tools: string[]
-  db: string
-  redis: string
-  vector_store: string
-  sandbox: boolean
+  tool_count?: number
+  tool_costs?: Record<string, string>
+  db: HealthServiceState | string
+  redis: HealthServiceState | string
+  vector_store: HealthServiceState | string
+  sandbox: HealthServiceState | boolean
   encrypted_storage: boolean
+  ocr_ready?: boolean
+  llm_ready?: boolean
   cache: Record<string, unknown>
 }
 

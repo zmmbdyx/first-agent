@@ -137,6 +137,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: 品牌规则表自检（防止规则被削弱/改写后审计形同虚设）
+        run: python scripts/audit_brand.py --selftest
       - name: 密钥 / 私有端点 / 个人敏感信息（含全历史）
         run: python scripts/audit_secrets.py --repo .
       - name: 第三方品牌名称扫描（界面与文案原创性）

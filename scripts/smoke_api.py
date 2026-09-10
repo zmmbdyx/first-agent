@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -30,10 +31,9 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-# 强制离线：即使本机 .env 配了真实端点，冒烟也走 mock，避免误扣费与网络抖动
+# 强制离线：即使本机 .env 配了真实端点，冒烟也走 mock，避免误扣费与网络抖动。
+# 数据库连接串在 main() 里按 --use-env-db 决定（默认覆盖成临时 SQLite，保证可重复）。
 os.environ["LLM_PROVIDER"] = "mock"
-os.environ["DATABASE_URL"] = ""
-os.environ["SQLITE_FALLBACK_URL"] = f"sqlite:///{Path(tempfile.gettempdir()).as_posix()}/pf_smoke.db"
 os.environ["REDIS_URL"] = ""
 os.environ["VECTOR_STORE_URL"] = ""
 
@@ -52,6 +52,19 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description="端到端接口冒烟")
+    ap.add_argument("--use-env-db", action="store_true",
+                    help="使用环境里的 DATABASE_URL（默认强制用临时 SQLite，保证可重复）")
+    args = ap.parse_args()
+
+    if args.use_env_db:
+        # 真正跑在 PostgreSQL 等外部库上：只清掉临时 SQLite 回落，保留 DATABASE_URL
+        os.environ.pop("SQLITE_FALLBACK_URL", None)
+    else:
+        os.environ["DATABASE_URL"] = ""
+        os.environ["SQLITE_FALLBACK_URL"] = \
+            f"sqlite:///{Path(tempfile.gettempdir()).as_posix()}/pf_smoke.db"
+
     from fastapi.testclient import TestClient
 
     import main as app_mod

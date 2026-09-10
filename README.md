@@ -277,6 +277,7 @@ python backend/cli.py                                                           
 | `PRIVACY_MODE` | `false` | 隐私模式：会话不落盘 |
 | `DATABASE_URL` | `postgresql+psycopg://user:password@localhost:5432/pathforge` | 生产数据库 |
 | `SQLITE_FALLBACK_URL` | `sqlite:///./data/pathforge.db` | `DATABASE_URL` 为空时的回落 |
+| `DB_FALLBACK_POLICY` | 空（按环境判定） | 主库不可达时：`allow` 回落 SQLite / `deny` 直接失败；留空时 `APP_ENV=production` 视为 `deny` |
 | `REDIS_URL` | `redis://localhost:6379/0` | 短期记忆与队列（连不上自动降级） |
 | `VECTOR_STORE_URL` / `VECTOR_STORE_PATH` | `http://localhost:8000` / `./data/vectors` | 长期记忆向量库 |
 | `EMBEDDING_MODEL` | `your-embedding-model` | 向量化模型 |
@@ -400,6 +401,7 @@ python backend/cli.py                                                           
 ├── scripts/
 │   ├── smoke_api.py                # 端到端接口冒烟（32 项）
 │   ├── ui_check.py                 # 交互层实机校验（27 项，Playwright 真实点击）
+│   ├── check_postgres_path.py      # PostgreSQL 方言级校验（无实例可跑，8 项）
 │   ├── capture_screenshots.py      # Playwright 截图
 │   ├── audit_secrets.py            # 密钥/隐私审计（含 git 历史）
 │   └── audit_brand.py              # 第三方品牌字样审计
@@ -430,6 +432,11 @@ python scripts/smoke_api.py         # 32 项：契约端点 + 事件序列 + 路
 # 交互层实机校验（需后端已启动且前端已构建）
 python scripts/ui_check.py          # 27 项：真实点击侧栏/设置四 Tab/右侧四面板/输入区
 
+# PostgreSQL 代码路径（无需数据库实例也能跑方言级校验）
+python scripts/check_postgres_path.py   # 8 项：JSONB / 时区列 / 主键 / 索引
+set DATABASE_URL=postgresql+psycopg://... && python scripts/check_postgres_path.py  # 有实例时追加建表往返
+python scripts/smoke_api.py --use-env-db   # 端到端跑在 DATABASE_URL 指向的库上
+
 # 脱敏与合规审计
 python scripts/audit_secrets.py --repo .    # 密钥/私有端点/个人敏感信息（含全历史）
 python scripts/audit_brand.py --repo .      # 第三方品牌字样（含全历史）
@@ -438,7 +445,8 @@ python scripts/audit_brand.py --repo .      # 第三方品牌字样（含全历�
 cd frontend && npx tsc --noEmit && npm run build
 ```
 
-CI（`.github/workflows/ci.yml`）分四个作业：后端测试、前端构建与类型检查、交互层实机校验、脱敏审计。
+CI（`.github/workflows/ci.yml`）分五个作业：后端测试、前端构建与类型检查、
+交互层实机校验、PostgreSQL 路径（带真实 PG 服务容器）、脱敏审计。
 
 > **为什么需要 `ui_check.py`**：类型检查与构建通过并不代表交互接通——
 > 实测中"打开设置弹窗整页崩成空白"（后端 `/api/health` 返回结构化对象，前端按字符串渲染）
@@ -519,10 +527,14 @@ docker run -d -p 8000:8000 --env-file backend/.env -v ./data:/app/data -v ./work
 
 **已知取舍**
 
-- 前端代码高亮分块约 1.5 MB（gzip 521 KB）：`react-syntax-highlighter` 默认打包全量语言；
-  已通过 `manualChunks` 独立分块，后续可改为按需注册语言进一步瘦身；
-- 本地开发默认 SQLite：模型与查询按 PostgreSQL 设计（JSONB、时区感知时间列、索引），
-  但本机无 PostgreSQL 实例时无法验证 PG 专有路径，CI 亦只覆盖 SQLite；
+- 前端代码高亮分块已从 1.5 MB 降到 **80.7 kB**（gzip 29.8 kB）：改用 `prism-light` +
+  按需注册 17 种常用语言，并让文件预览复用同一个 `CodeBlock`（此前它单独引入全量高亮，
+  等于把全部语言又打进来一次）；
+- 本地开发默认 SQLite：PostgreSQL 专用路径（JSONB、时区列、索引）已由
+  `scripts/check_postgres_path.py` 做**方言级编译校验**，CI 另有真实 PG 服务容器的端到端作业；
+  但本机无 PG 实例，真实读写往返只在 CI 覆盖；
+- 主库不可达时开发环境会回落 SQLite（`DB_FALLBACK_POLICY` 可关）；
+  **生产请保持 `deny`**，否则连接串写错会把数据静默写进容器内的 SQLite；
 - 回滚只恢复会话态，不删除工作区产物（见"中断·恢复·回滚"）；
 - `data/` 下的旧版会话存档会在首次启动时导入数据库（`SessionService.import_legacy`）。
 

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,6 +21,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BACKEND_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BACKEND_DIR.parent
 ROOT = PROJECT_ROOT  # 运行时数据（data/）仍位于仓库根，与 .gitignore 约定一致
+
+
+def _ensure_utf8_stdout() -> None:
+    """把标准输出切到 UTF-8（失败则忽略）。
+
+    为什么放在配置模块：它是所有入口（main / cli / 脚本 / 测试）的共同依赖。
+    Windows 控制台默认 GBK，任何一行含非 GBK 字符的日志（emoji、特殊符号）
+    都会抛 UnicodeEncodeError —— 日志本是最不该反过来把流程搞崩的东西。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 — 老解释器/被重定向的流没有 reconfigure
+            pass
+
+
+_ensure_utf8_stdout()
 
 # .env 查找顺序：backend/.env、项目根 .env、项目根 .env.local（后者覆盖前者）
 _ENV_FILES = (BACKEND_DIR / ".env", PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.local")
@@ -74,6 +92,9 @@ class Settings(BaseSettings):
     # ---------------- 数据库 ----------------
     database_url: str = ""
     sqlite_fallback_url: str = "sqlite:///./data/pathforge.db"
+    # 主库不可达时的降级策略：allow=回落 SQLite；deny=直接失败（避免写错库）；
+    # 留空则按环境判定：production 视为 deny，其余视为 allow
+    db_fallback_policy: str = ""
 
     # ---------------- Redis / 向量库 ----------------
     redis_url: str = ""
@@ -186,6 +207,21 @@ class Settings(BaseSettings):
     @property
     def is_postgres(self) -> bool:
         return self.resolved_database_url.startswith("postgresql")
+
+    @property
+    def allow_sqlite_fallback(self) -> bool:
+        """主库不可达时是否允许静默回落 SQLite。
+
+        生产环境必须为 False：否则连接串写错（改错密码/端口）会让服务照常启动，
+        却把数据写进容器内的 SQLite——表现为"功能正常、数据凭空消失"，
+        比直接启动失败难排查得多。开发环境保持 True，保证零依赖也能跑。
+        """
+        policy = (self.db_fallback_policy or "").strip().lower()
+        if policy in ("deny", "false", "0", "no", "strict"):
+            return False
+        if policy in ("allow", "true", "1", "yes", "lenient"):
+            return True
+        return self.app_env.strip().lower() not in ("production", "prod")
 
     @property
     def llm_ready(self) -> bool:

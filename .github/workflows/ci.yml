@@ -91,6 +91,42 @@ jobs:
       - name: 交互层实机校验（真实点击 + 网络断言）
         run: python scripts/ui_check.py
 
+  postgres:
+    name: PostgreSQL 路径
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}/backend
+      LLM_PROVIDER: mock
+      # 一次性 CI 库：凭据是**字面占位符**（user/password），只存在于本次作业的
+      # 临时服务容器内，作业结束即销毁；因此可安全写在仓库里，也落在脱敏审计白名单内。
+      DATABASE_URL: postgresql+psycopg://user:password@127.0.0.1:5432/pathforge_ci
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: pathforge_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U user -d pathforge_ci"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: 安装依赖（含 PostgreSQL 驱动）
+        run: pip install -r backend/requirements.txt -r backend/requirements-postgres.txt
+      - name: 方言级校验（JSONB / 时区列 / 索引）
+        run: python scripts/check_postgres_path.py
+      - name: 真实实例端到端（建表 + 契约端点 + SSE 全链路）
+        # --use-env-db：不再把连接串覆盖成临时 SQLite，本次真正跑在 PostgreSQL 上
+        run: python scripts/smoke_api.py --use-env-db
+
   audit:
     name: 脱敏审计
     runs-on: ubuntu-latest

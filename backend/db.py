@@ -72,7 +72,14 @@ def _build() -> Engine:
         if primary.startswith("sqlite"):
             raise
         _last_error = f"{type(e).__name__}: {e}"
+        if not cfg.allow_sqlite_fallback:
+            # 生产语义：宁可直接失败，也不要把数据悄悄写进另一个库
+            raise RuntimeError(
+                f"主数据库不可达且已禁用降级（DB_FALLBACK_POLICY=deny / APP_ENV=production）："
+                f"{_last_error}。请检查 DATABASE_URL；如确需回落 SQLite，"
+                f"显式设置 DB_FALLBACK_POLICY=allow。") from e
         print(f"[db] 主数据库不可用（{_last_error}），已降级为 SQLite: {fallback}")
+        print("[db] 生产环境请设置 DB_FALLBACK_POLICY=deny，避免连接串写错时静默写错库")
         engine = _make_engine(fallback)
         _active_url = fallback
     _engine = engine

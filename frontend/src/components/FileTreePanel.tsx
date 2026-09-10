@@ -13,12 +13,10 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import SyntaxHighlighter from 'react-syntax-highlighter'
-import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import CodeBlock from '@/components/CodeBlock'
 import { api, useFileTree } from '@/api/client'
 import { IconChevronDown, IconChevronRight, IconFile, IconFolder, IconRefresh } from '@/components/icons'
 import { cn, formatBytes, languageOf } from '@/lib/utils'
-import { useAppStore } from '@/store/useAppStore'
 import type { FileNode } from '@/types'
 
 export interface FileTreePanelProps {
@@ -45,7 +43,6 @@ function flatten(nodes: FileNode[], openDirs: Set<string>, depth = 0, out: FlatR
 }
 
 export default function FileTreePanel({ workspace, active, className }: FileTreePanelProps) {
-  const theme = useAppStore((s) => s.theme)
   const [openDirs, setOpenDirs] = useState<Set<string>>(() => new Set())
   const [selected, setSelected] = useState<string | null>(null)
 
@@ -178,20 +175,11 @@ export default function FileTreePanel({ workspace, active, className }: FileTree
             )}
 
             {file && file.type === 'text' && (
-              <SyntaxHighlighter
-                language={file.language || languageOf(file.path)}
-                style={theme === 'dark' ? oneDark : oneLight}
-                customStyle={{
-                  margin: 0, padding: '8px 10px', fontSize: '11px', lineHeight: '17px',
-                  background: 'var(--pf-bg-elevated)', borderRadius: 0,
-                }}
-                codeTagProps={{ style: { fontFamily: 'inherit' } }}
-                showLineNumbers={file.content.split('\n').length > 12}
-                lineNumberStyle={{ color: 'var(--pf-text-faint)', minWidth: '2.2em' }}
-                wrapLongLines={false}
-              >
-                {file.content}
-              </SyntaxHighlighter>
+              // 复用 CodeBlock（按需注册语言的轻量高亮）：原先这里直接 import 全量
+              // react-syntax-highlighter，会把所有语言再打进包一次，等于让首屏多背 500KB+
+              <div className="px-2 py-2">
+                <CodeBlock code={file.content} language={file.language || languageOf(file.path)} />
+              </div>
             )}
 
             {file && file.type === 'image' && (

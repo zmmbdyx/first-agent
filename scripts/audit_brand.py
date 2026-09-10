@@ -35,19 +35,55 @@ except Exception:  # noqa: BLE001 — 老解释器没有 reconfigure
     pass
 
 # ---- 品牌特征（大小写不敏感，按词边界匹配以避免误伤普通单词） ----
+#
+# 为什么用「片段拼接」而不是直接写字面量：
+#   1) 审计脚本自身若含完整品牌字面量，就不得不把自己加进跳过名单——等于审计有盲区；
+#   2) 历史脱敏（git filter-repo --replace-text）会改写所有提交里的 blob，
+#      脚本里的检测模式同样会被改掉，导致审计能力被"脱敏"破坏。
+#   拼接后源码中不存在完整品牌词，规则表依然可读、可审计。
+def _t(*parts: str) -> str:
+    """把片段拼成完整词（源码里不出现完整品牌字面量）。"""
+    return "".join(parts)
+
+
+_VENDORS = [
+    _t("deep", "seek"), _t("深度", "求索"), _t("zhi", "pu"), _t("智", "谱"),
+    _t("big", "model"), _t("moon", "shot"), _t("ki", "mi"), _t("月之", "暗面"),
+    _t("q", "wen"), _t("通用", "千问"), _t("通", "义"), _t("ali", "yun"),
+    _t("ali", "yun", "cs"), _t("阿里", "云"), _t("百", "炼"), _t("anthro", "pic"),
+    _t("clau", "de"), _t("gem", "ini"), _t("mist", "ral"), _t("lla", "ma"),
+    _t("x", "ai"), _t("gr", "ok"),
+]
+_PRODUCTS = [
+    _t("chat", "gpt"), _t("gpt-", "[3-9]"), _t("gl", "m-", r"\d"), _t("er", "nie"),
+    _t("文心", "一言"), _t("hun", "yuan"), _t("混", "元"), _t("dou", "bao"), _t("豆", "包"),
+]
+_AGENTS = [
+    _t("har", "ness"), _t("co", "pilot"), _t("cur", "sor"), _t("wind", "surf"),
+    _t("de", "vin"), _t("auto", "gpt"), _t("baby", "agi"), _t("open", "hands"),
+    _t("clau", "de", "-code"),
+]
+_SEARCH = [
+    _t("ta", "vily"), _t("duck", "duckgo"), _t("per", "plexity"), _t("serp", "api"),
+    r"brave\s*search",
+]
+
+
+def _alternation(words: list[str]) -> re.Pattern:
+    """词边界断言 + 片段拼接的候选词 → 一个匹配模式。"""
+    return re.compile(r"(?<![a-z0-9])(?:" + "|".join(words) + r")(?![a-z0-9])", re.I)
+
+
 BRANDS: list[tuple[str, re.Pattern]] = [
-    ("模型厂商", re.compile(r"(?<![a-z0-9])(?:generic-llm|通用模型服务|generic|通用端点|generic-endpoint|generic|"
-                            r"generic|月之暗面|generic|通用模型|通用|generic-endpoint|generic-endpoint|通用端点|通用|"
-                            r"generic|generic|gemini|mistral|llm|xai|grok)(?![a-z0-9])", re.I)),
-    ("模型产品", re.compile(r"(?<![a-z0-9])(?:chat-model|gpt-[3-9]|your-model-\d|ernie|文心一言|"
-                            r"generic|混元|doubao|豆包)(?![a-z0-9])", re.I)),
-    ("Agent 产品", re.compile(r"(?<![a-z0-9])(?:测试框架|copilot|cursor|windsurf|devin|"
-                              r"autogpt|babyagi|openhands|generic-code)(?![a-z0-9])", re.I)),
-    ("检索服务", re.compile(r"(?<![a-z0-9])(?:search-primary|search-fallback|perplexity|serpapi|brave\s*search)"
-                            r"(?![a-z0-9])", re.I)),
+    ("模型厂商", _alternation(_VENDORS)),
+    ("模型产品", _alternation(_PRODUCTS)),
+    ("Agent 产品", _alternation(_AGENTS)),
+    ("检索服务", _alternation(_SEARCH)),
 ]
 
 # ---- 允许的上下文：命中则不算违规（白名单必须显式、可审计） ----
+# CSS 的光标属性与某个 Agent 产品同名，这里同样用片段拼接，避免规则表自伤
+_CURSOR = _t("cur", "sor")
 ALLOW_LINE = re.compile(
     r"(?:"
     r"openai[\s\-_]?compatible"          # 协议取值：LLM_PROVIDER=openai-compatible
@@ -55,7 +91,8 @@ ALLOW_LINE = re.compile(
     r"|兼容协议|通用兼容"                  # 中性化的协议叙述
     r"|^\s*(?:from|import)\s+\w+"        # import 语句（包名）
     r"|pip\s+install|npm\s+(?:i|install)"  # 安装命令（包名）
-    r"|cursor\s*:|cursor-(?:pointer|default|text|not-allowed|move|grab|wait|help)"  # CSS 光标属性，与产品同名
+    r"|" + _CURSOR + r"\s*:"             # CSS 光标属性（与某 Agent 产品同名，属误报）
+    r"|" + _CURSOR + r"-(?:pointer|default|text|not-allowed|move|grab|wait|help)"
     r"|^\s*[\"']?(?:openai|ddgs|langchain[\w-]*|chromadb|redis|sqlalchemy)[\"']?\s*[><=~]"  # 依赖清单行
     r")", re.I)
 
@@ -144,6 +181,9 @@ def scan_history(root: Path) -> list[tuple[str, int, str, str]]:
             if not raw.startswith("+") or raw.startswith("+++"):
                 continue
             if current and not current.endswith(HISTORY_SUFFIX):
+                continue
+            # 与工作树扫描保持同一套跳过规则：审计脚本自身的规则表不是品牌引用
+            if current and Path(current).name in SKIP_FILES:
                 continue
             line = raw[1:]
             for _, lineno, category, matched in scan_text(line, current or "<history>"):

@@ -46,7 +46,47 @@ Agent 内置「求职智囊」人设（`core/prompts.py` 的 PERSONA_RULES，注
 | 隐私 | 无痕会话 | 该模式不落盘不记忆 |
 | 评测 | 反馈闭环 | 报告评分按钮，数据用于微调匹配权重 |
 
-![总览](data/reports/charts/batch_overview.png)
+## 系统运行截图
+
+> 截图由 `scripts/capture_screenshots.py` 用 Playwright 自动操作**真实运行中的页面**生成（非设计稿）：
+> `python server.py` → 打开 `http://127.0.0.1:8000` → 发送目标「帮我分析 data/jds/jd03_数据分析师.txt，匹配我的简历，给出面试题」
+> → 自动等待工作流跑完并截图。复现：
+> ```bash
+> pip install playwright && playwright install chromium
+> python server.py                     # 另开一个终端
+> python scripts/capture_screenshots.py
+> ```
+
+### 1. 主界面
+
+左侧是可切换的「工作流 / 记忆 / 简历库」抽屉，右侧是对话区，顶部可切换模型与会话；
+新会话会收到 Agent 的欢迎语，引导提供姓名与目标岗位。
+
+![Agent 主界面](./screenshots/agent_main.png)
+
+### 2. 运行过程（规划 → 工具调用 → 报告）
+
+右侧工作流面板实时直播：目标拆解进度（0/5）、每个子任务卡片、每步的**思考💭 → 工具调用🔧 → 观察结果**、
+耗时徽章与重试标记。可以清楚看到 `file_read` → `jd_analyze` → `resume_match` 的产物自动接线过程。
+
+![Agent 运行过程](./screenshots/agent_running.png)
+
+### 3. 运行结果（最终报告 + 完成态工作流）
+
+五个子任务全部完成，左侧渲染 markdown 报告（面试问题清单、行动清单），
+底部自动附「优化我的简历 / 出10道面试题 / 薪资谈判建议 / 查看我的数据」快捷操作。
+
+![Agent 运行结果](./screenshots/agent_result.png)
+
+### 4. Agent 记忆面板
+
+跨会话画像（岗位/简历/城市/JD 文件等结构化事实）与本次运行的统计（LLM 调用数、工具调用数、自动重试次数）。
+
+![Agent 记忆面板](./screenshots/agent_memory.png)
+
+> 说明：原 README 此处引用的 `data/reports/charts/batch_overview.png` 因 `data/reports/` 已被 `.gitignore`
+> 排除（报告含简历个人信息），在 GitHub 上无法显示，故替换为上面随仓库提交的运行截图。
+> 批量评测总览图可在本地运行 `python tests/batch_eval.py` 重新生成。
 
 ## 功能总览
 
@@ -181,7 +221,10 @@ docker run -d -p 8000:8000 --env-file .env -v ./data:/app/data ai-job-agent
 │   ├── jds/             # 10个真实风格JD
 │   ├── resumes/         # 简历库（用户上传）
 │   ├── uploads/         # 临时材料（JD截图/文档）
-│   └── reports/         # 批量评测报告与图表
+│   └── reports/         # 批量评测报告与图表（含个人信息，不入库）
+├── scripts/
+│   └── capture_screenshots.py  # Playwright 自动操作界面并截图（README 截图来源）
+├── screenshots/         # 系统运行截图
 ├── tests/               # 冒烟测试 + 批量评测
 ├── Dockerfile           # 容器化部署
 └── .env.example         # 配置模板（占位，不含真实key）

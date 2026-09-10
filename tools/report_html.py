@@ -1,10 +1,11 @@
 """可交互 HTML 匹配报告：自包含单文件（无外部依赖），悬停技能标签可查看 JD 频次与补齐建议。"""
 import html
-import json
 import math
 import re
 import time
 from pathlib import Path
+
+from config import ROOT, to_root_relative
 
 
 def _radar_svg(values: dict, size: int = 460) -> str:
@@ -46,7 +47,11 @@ def build_html_report(match: dict, role: str = "") -> str:
     """生成自包含交互报告，返回文件路径。悬停任意技能可查看JD频次与建议。"""
     ts = time.strftime("%Y-%m-%d %H:%M")
     safe = re.sub(r"[^\w\u4e00-\u9fff-]", "_", role or "岗位")[:20]
-    out = Path("data/reports/interactive") / f"匹配报告_{safe}_{time.strftime('%H%M%S')}.html"
+    # 改动：原实现用相对 CWD 的 "data/reports/interactive/..." 落盘，服务从其他
+    # 工作目录启动时会写到别处且 /files 链接失效；改为以项目根 ROOT 定位，
+    # 返回值仍是相对项目根的正斜杠路径（前端 /files/ 前缀拼接口径不变）。
+    out = Path(ROOT) / "data" / "reports" / "interactive" / \
+        f"匹配报告_{safe}_{time.strftime('%H%M%S')}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     def chips(skills: dict, ok: bool):
@@ -119,4 +124,4 @@ def build_html_report(match: dict, role: str = "") -> str:
 <div class="tip">💡 使用提示：悬停技能标签可查看该技能在 JD 中的出现频次与补齐建议；本报告由 Agent 自动分析生成，评分模型：硬技能70% + 软技能20% + 学历10%。</div>
 </div></body></html>"""
     out.write_text(html_doc, encoding="utf-8")
-    return str(out).replace("\\", "/")
+    return to_root_relative(out)

@@ -1,5 +1,6 @@
 """Agent 编排器：规划 → 逐任务 ReAct 执行（工具重试/降级） → 综合报告。
 支持 ask_user 暂停-恢复、任务间产物自动接线（artifacts）、全程事件发射供前端可视化。"""
+import hashlib
 import json
 import re
 import time
@@ -100,6 +101,7 @@ class JobAgent:
             session.add_message("assistant", f"抱歉，执行中遇到错误：{e}")
         finally:
             self.memory.save(session)
+            self.memory.compact(session)  # 超长对话滚动摘要（超过 max_messages 触发）
             if not self.cfg.privacy_mode:
                 profile_store.merge_from(session.facts)  # 跨会话长期记忆：增量合并
 
@@ -167,7 +169,9 @@ class JobAgent:
     # ================= 事实抽取（记忆更新） =================
     def _data_summary(self, session: Session) -> str:
         """「查看我的数据」：本地汇总用户画像与进度；30天未更新的事实标记「待确认」。"""
-        f = {k: v for k, v in session.facts.items() if not str(k).startswith("_")}
+        # 改动：原实现把空值（如 resume_paths=[]）也当成一行展示，会输出
+        # 「- 简历：****」这类空行；这里过滤掉空值。
+        f = {k: v for k, v in session.facts.items() if not str(k).startswith("_") and v}
         label = {"name": "姓名", "target_role": "目标岗位", "city": "城市",
                  "salary_range": "期望薪资", "education": "学历", "experience_years": "经验",
                  "jd_paths": "JD", "resume_paths": "简历", "preferences": "偏好"}
@@ -335,6 +339,7 @@ class JobAgent:
         task.status = "running"
         self.bus.emit("task_start", task_id=task.id, title=task.title, tool=task.tool)
         consecutive_fails, last_obs, final_text = 0, "", None
+        failed_keys = set()   # 改动：任务内「同工具+同参数」失败过的调用记为熔断键
 
         def on_retry(n: int, err: str):
             task.retries += 1
@@ -349,9 +354,18 @@ class JobAgent:
                 task.status, task.error = "failed", f"执行器决策失败: {e}"
                 self.bus.emit("task_finish", task_id=task.id, status="failed", error=task.error)
                 return
-            action = decision.get("action") or {}
+            # 改动：模型输出的结构不做校验时，若返回 {"action": "xxx"} 或
+            # {"action": {"args": "path=x"}}，下面的 .get()/dict() 会抛
+            # AttributeError/ValueError 并击穿 handle_message 的兜底 except，
+            # 导致整轮会话中断（而不是仅这一步失败）。这里统一收敛为安全的默认值。
+            if not isinstance(decision, dict):
+                decision = {}
+            action = decision.get("action")
+            if not isinstance(action, dict):
+                action = {}
+            raw_args = action.get("args")
             tool = str(action.get("tool") or "none").strip().lower()
-            args = dict(action.get("args") or {})
+            args = dict(raw_args) if isinstance(raw_args, dict) else {}
             thought = str(decision.get("thought") or "")[:300]
             self.bus.emit("thought", task_id=task.id, step=step, thought=thought)
 
@@ -381,8 +395,13 @@ class JobAgent:
                 args["content"] = self._task_answer(session, task, observation=last_obs)
 
             args = self._autofill_args(session, task, tool, args)
-            cache_key = (session.id, tool,
-                         json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)[:600])
+            # 改动：原缓存键把参数 JSON 截断到 600 字符，两份仅在后半段不同的材料
+            # （典型：长 JD 文本）会得到同一个键，从而命中错误的内存缓存、返回上一次的
+            # 分析结果。改为对完整参数序列化后取 sha256 摘要，消除截断碰撞。
+            args_sig = hashlib.sha256(
+                json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+                .encode("utf-8", "ignore")).hexdigest()
+            cache_key = (session.id, tool, args_sig)
             tool_cost = ""
             try:
                 tool_cost = self.registry.get(tool).cost
@@ -392,6 +411,12 @@ class JobAgent:
             if cache_key in self._tool_cache:
                 res: ToolResult = self._tool_cache[cache_key]
                 hit_kind = "mem"
+            elif cache_key in failed_keys:
+                # 改动：同一任务内「同工具+同参数」已经失败过，模型若再次发起完全相同的
+                # 调用则直接熔断——不再重复触发一轮工具重试（每次重试含 1.5s/3s 退避睡眠）
+                # 与 token 消耗。计入失败次数，走下方统一的失败分支。
+                res = ToolResult(ok=False, error="同一工具同参数重复调用，已熔断（此前已失败）")
+                hit_kind = None
             else:
                 self.bus.emit("tool_call", task_id=task.id, tool=tool, cost=tool_cost,
                               args={k: str(v)[:120] for k, v in args.items()})
@@ -418,12 +443,15 @@ class JobAgent:
                                    "observation": last_obs})
                 self.bus.emit("tool_result", task_id=task.id, tool=tool, brief=last_obs)
                 self._update_artifacts(session, task, tool, res.data)
+                consecutive_fails = 0  # 改动：变量语义是「连续失败」，成功一次后必须清零，
+                # 否则「失败→成功→失败」也会被累计到 2 而误判整任务失败
             else:
                 last_obs = f"工具失败: {res.error}"
                 task.steps.append({"thought": thought, "tool": tool, "ok": False,
                                    "args": {k: str(v)[:100] for k, v in args.items()},
                                    "observation": res.error})
                 self.bus.emit("tool_error", task_id=task.id, tool=tool, error=res.error[:300])
+                failed_keys.add(cache_key)   # 改动：记录熔断键，阻止同参数重复空转
                 consecutive_fails += 1
                 if consecutive_fails >= 2:  # 同一任务连续两次工具失败 → 判定失败，不无限烧 token
                     task.status, task.error = "failed", res.error
@@ -485,6 +513,9 @@ class JobAgent:
             "task_results": [{"title": t.title, "status": t.status,
                               "result": (t.result or t.error)[:500]} for t in session.tasks],
             "artifacts": self._compact_artifacts(session, limit=1200),
+            # 改动：同 _react_payload——滚动摘要原先是「只写不读」的死数据，
+            # 综合报告阶段同样需要它作为历史上下文。
+            "history_summary": (session.summary or "")[-800:],
         }
         material_str = json.dumps(material, ensure_ascii=False)
         try:
@@ -532,6 +563,10 @@ class JobAgent:
                                    "tool_hint": task.tool, "args_hint": task.args},
             "facts": {k: v for k, v in session.facts.items() if not str(k).startswith("_")},
             "artifacts_brief": self._compact_artifacts(session, limit=800),
+            # 改动：memory.compact() 会把超限的早期对话滚动摘要进 session.summary，
+            # 但原先没有任何地方读取它——等于历史上下文被静默丢弃（还白付一次摘要 LLM 调用）。
+            # 这里把摘要（截断后）注入执行器上下文，恢复压缩的本来意图。
+            "history_summary": (session.summary or "")[-800:],
             "transcript": transcript,
         }
         if self.cfg.provider == "mock":
@@ -642,12 +677,23 @@ class JobAgent:
                               ensure_ascii=False, default=str)
         if self.cfg.provider == "mock":
             return self.llm.chat([{"role": "user", "content": body}], purpose="task_answer")
-        return self.llm.chat(
-            [{"role": "system",
-              "content": PERSONA_RULES + "\n\n你是AI求职助手的执行器。基于材料完成当前子任务，"
-                         "输出具体、可执行的中文 markdown 内容，直接给结论。材料：" + body},
-             {"role": "user", "content": f"请完成任务「{task.title}」：{task.detail}"}],
-            purpose="task_answer")
+        try:
+            return self.llm.chat(
+                [{"role": "system",
+                  "content": PERSONA_RULES + "\n\n你是AI求职助手的执行器。基于材料完成当前子任务，"
+                             "输出具体、可执行的中文 markdown 内容，直接给结论。材料：" + body},
+                 {"role": "user", "content": f"请完成任务「{task.title}」：{task.detail}"}],
+                purpose="task_answer")
+        except Exception as e:
+            # 改动：此前该 LLM 调用没有兜底，上游超时/限流抛出的 LLMError 会穿透
+            # _run_task/_execute_plan，让整轮计划中断（后续子任务与最终报告全部不再执行）。
+            # 改为降级：用本任务已获得的工具观察结果拼出可读结论，保证流程继续。
+            self.bus.emit("error", message=f"任务「{task.title}」结论生成失败，已降级: {e}")
+            brief = (observation or "").strip()
+            if brief:
+                return f"## {task.title}\n\n{brief[:500]}"
+            return (f"## {task.title}\n\n（结论生成失败：{type(e).__name__}）"
+                    f"本任务的中间结果已保留，可在对话中要求重试。")
 
     @staticmethod
     def _obs_brief(data) -> str:

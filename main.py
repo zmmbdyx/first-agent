@@ -4,13 +4,11 @@
   python main.py --serve                                            # 启动Web服务
 """
 import sys
-import time
 
 sys.stdout.reconfigure(encoding="utf-8")
 
 from config import load_config
 from core.agent import JobAgent
-from core.memory import Task
 
 COLOR = {"task_start": "\033[36m", "done": "\033[32m", "failed": "\033[31m",
          "retry": "\033[33m", "ask_user": "\033[33m"}

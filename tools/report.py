@@ -3,6 +3,7 @@ import re
 import time
 from pathlib import Path
 
+from config import ROOT, to_root_relative
 from tools.base import Tool, ToolError
 
 _PII_RE = re.compile(r"(1[3-9]\d)[\s:-]?(\d{4})[\s:-]?(\d{4})"
@@ -30,9 +31,12 @@ class WriteReportTool(Tool):
         if not content or len(content.strip()) < 20:
             raise ToolError("报告内容为空或过短")
         safe = re.sub(r"[^\w\u4e00-\u9fff-]", "_", filename or f"report_{time.strftime('%Y%m%d_%H%M%S')}")
-        path = Path("data/reports") / f"{safe[:60]}.md"
+        # 改动：报告原先写相对 CWD 的 "data/reports/"，服务从其他工作目录启动会落到别处
+        # 且 /files 链接 404；改为以项目根定位，返回值仍为相对项目根的路径。
+        path = Path(ROOT) / "data" / "reports" / f"{safe[:60]}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(mask_pii(content), encoding="utf-8")
-        return {"path": str(path).replace("\\", "/"),
-                "url": f"/files/{path.as_posix()}",
+        rel = to_root_relative(path)
+        return {"path": rel,
+                "url": f"/files/{rel}",
                 "chars": len(content)}

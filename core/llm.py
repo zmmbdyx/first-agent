@@ -76,7 +76,10 @@ class LLMClient:
             raise
 
     def _chat_retry(self, messages, purpose, json_mode, max_retries) -> str:
-        retries = max_retries if max_retries is not None else self.cfg.llm_max_retries
+        # 改动：原实现若 max_retries/配置为 0，for 循环一次都不执行，直接抛出
+        # "LLM 调用失败（已重试0次）: None"（last_err 为 None），报错信息无参考价值。
+        # 这里保证至少尝试一次（配置侧也做了 >=1 的下限护栏）。
+        retries = max(1, max_retries if max_retries is not None else self.cfg.llm_max_retries)
         last_err = None
         for attempt in range(1, retries + 1):
             try:
@@ -249,7 +252,11 @@ class MockLLM:
             chart = m.get("chart") or ""
             html_r = m.get("html") or ""
             parts += ["## 三、简历匹配度分析", "",
-                      f"![匹配度图表](/{chart})" if chart else "",
+                      # 改动：原为 f"![匹配度图表](/{chart})"，多出的前导斜杠使前端
+                      # utils.js 的 "data/ 前缀 → /files/ 前缀" 规则不生效，图片链接
+                      # 指向不存在的 /data/... 路由（404）；去掉斜杠后与真实 LLM 分支
+                      # 输出的 data/reports/... 写法一致。
+                      f"![匹配度图表]({chart})" if chart else "",
                       f"[🔍 打开交互式报告（悬停查看技能差距）](/files/{html_r})" if html_r else "",
                       f"- **已具备**：{'、'.join(list(matched.keys())[:10]) or '无'}",
                       f"- **缺失**：{'、'.join(list(missing.keys())[:10]) or '无'}", ""]

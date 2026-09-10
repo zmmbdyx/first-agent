@@ -1,7 +1,7 @@
 """工具基类、统一返回结构与带重试的注册表。"""
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Type
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List
 
 
 class ToolError(Exception):
@@ -47,7 +47,16 @@ class ToolRegistry:
 
     def call(self, name: str, args: dict, on_retry: Callable = None) -> ToolResult:
         """带指数退避的工具调用；重试过程通过 on_retry 回调对外发射事件。"""
-        tool = self.get(name)
+        # 改动：原先 self.get(name) 在 try 之外，模型编造/写错工具名时 ToolError 会直接
+        # 穿透 call()→_run_task()→handle_message() 的兜底 except，导致整轮会话中断
+        # （而不是仅该子任务失败）。这里改为返回失败的 ToolResult，并同样计入调用统计。
+        try:
+            tool = self.get(name)
+        except ToolError as e:
+            stat = self.call_stats.setdefault(name, {"calls": 0, "fails": 0, "retries": 0})
+            stat["calls"] += 1
+            stat["fails"] += 1
+            return ToolResult(ok=False, error=str(e))
         stat = self.call_stats.setdefault(name, {"calls": 0, "fails": 0, "retries": 0})
         stat["calls"] += 1
         last_err = None

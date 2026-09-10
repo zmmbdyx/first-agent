@@ -27,7 +27,7 @@ def _load() -> dict:
 
 def load() -> dict:
     """返回全局画像 facts（只含白名单字段）。"""
-    import json
+    # 改动：删除未使用的 `import json`（pyflakes 报 unused import）
     try:
         data = _load()
         return {k: v for k, v in (data.get("facts") or {}).items()
@@ -49,7 +49,8 @@ def merge_from(facts: dict):
                 changed = True
             profile.setdefault("facts", {})[k] = v
             profile.setdefault("updated_at", {})[k] = now
-    if changed or profile.get("facts"):
+    if changed:  # 改动：原条件为 `changed or profile.get("facts")`，只要画像非空就
+        # 每条消息都重写一次加密文件（无效磁盘写入）；仅在字段真正变化时落盘。
         try:
             secure_store.write_bytes(PROFILE_FILE, json.dumps(profile, ensure_ascii=False).encode("utf-8"))
         except Exception:

@@ -116,14 +116,11 @@ class JdAnalyzeTool(Tool):
 
     def run(self, jd_text: str = "", jd_path: str = "", top_k: int = 15) -> dict:
         if jd_path:
-            from pathlib import Path
-            from tools.file_tools import _resolve
-            p = Path(_resolve(jd_path))
-            if p.suffix.lower() == ".pdf":
-                from tools.file_tools import PdfExtractTool
-                jd_text = PdfExtractTool().run(path=str(p))["text"]
-            else:
-                jd_text = p.read_text(encoding="utf-8", errors="ignore")
+            # 改动：原先对非 PDF 的 jd_path 直接 Path.read_text()，读加密落盘的文件
+            # （上传的 JD 为 ENC1: 密文）会得到乱码或解码失败；统一走 read_text_any，
+            # 同时顺带支持了 docx/图片(OCR) 形式的 JD 文件。
+            from tools.file_tools import read_text_any
+            jd_text = read_text_any(jd_path)
         if not jd_text:
             raise ToolError("需要提供 jd_text 或 jd_path")
         result = analyze_jd_text(jd_text)

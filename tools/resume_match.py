@@ -15,15 +15,11 @@ def read_resume_text(resume_text: str = "", resume_path: str = "") -> str:
         return resume_text
     if not resume_path:
         raise ToolError("需要提供 resume_text 或 resume_path")
-    from tools.file_tools import _resolve
-    p = Path(_resolve(resume_path))
-    if p.suffix.lower() == ".pdf":
-        from tools.file_tools import PdfExtractTool
-        return PdfExtractTool().run(path=str(p))["text"]
-    if p.suffix.lower() == ".docx":
-        from tools.file_tools import DocxExtractTool
-        return DocxExtractTool().run(path=str(p))["text"]
-    return p.read_text(encoding="utf-8", errors="ignore")
+    # 改动：原实现按扩展名分支后对 txt/md 直接 read_text，读加密落盘的上传简历
+    # 会得到 ENC1: 密文乱码（匹配分静默失真）；统一交给 file_tools.read_text_any，
+    # 该入口兼容加密存储与 pdf/docx/图片格式。
+    from tools.file_tools import read_text_any
+    return read_text_any(resume_path)
 
 
 def compute_match(jd_text: str, resume_text: str) -> dict:
@@ -157,10 +153,15 @@ class ResumeMatchTool(Tool):
         result = compute_match(jd_text, resume_text)
         ts = time.strftime("%H%M%S")
         safe_role = re.sub(r"[^\w\u4e00-\u9fff-]", "_", role or "岗位")[:20]
-        chart = render_match_chart(result, Path(f"data/reports/charts/match_{safe_role}_{ts}.png"), role)
-        result["chart"] = str(chart).replace("\\", "/")
-        radar = render_radar_chart(result, Path(f"data/reports/charts/radar_{safe_role}_{ts}.png"), role)
-        result["radar_chart"] = str(radar).replace("\\", "/")
+        # 改动：图表原先写相对 CWD 的 "data/reports/charts/..."，服务若从其他工作目录
+        # 启动就会写到错误位置且 /files 链接失效；改为以项目根 ROOT 定位，
+        # 返回值仍用 to_root_relative 还原成与旧格式一致的相对路径（前端无需改动）。
+        from config import ROOT, to_root_relative
+        charts_dir = Path(ROOT) / "data" / "reports" / "charts"
+        chart = render_match_chart(result, charts_dir / f"match_{safe_role}_{ts}.png", role)
+        result["chart"] = to_root_relative(chart)
+        radar = render_radar_chart(result, charts_dir / f"radar_{safe_role}_{ts}.png", role)
+        result["radar_chart"] = to_root_relative(radar)
         from tools.report_html import build_html_report
         result["html"] = build_html_report(result, role)
         return result

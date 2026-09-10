@@ -29,6 +29,28 @@ def default_resume_path() -> str:
     return str(max(candidates, key=lambda p: p.stat().st_mtime))
 
 
+def read_text_any(path: str) -> str:
+    """按扩展名统一读取文本内容：txt/md（兼容加密落盘）、pdf、docx、图片(OCR)。
+    改动：原先 tools/jd_analyze.py 与 tools/resume_match.py 对非 PDF 文件直接
+    Path.read_text()，而上传的简历/JD 是经 core.secure_store 加密落盘的
+    （文件头 ENC1:），直接读会得到密文乱码（errors="ignore" 还会静默吞掉乱码），
+    导致「上传的简历匹配出 0 分」这类静默错误；这里收敛为一个统一入口。"""
+    p = Path(_resolve(path))
+    ext = p.suffix.lower()
+    if ext == ".pdf":
+        return PdfExtractTool().run(path=str(p))["text"]
+    if ext == ".docx":
+        return DocxExtractTool().run(path=str(p))["text"]
+    if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+        from tools.image_ocr import ImageOcrTool
+        return ImageOcrTool().run(path=str(p))["text"]
+    from core import secure_store
+    text = secure_store.read_bytes(p).decode("utf-8", "ignore")
+    if not text.strip():
+        raise ToolError(f"文件无可读文本（内容为空或格式不支持）: {p.name}")
+    return text
+
+
 class PdfExtractTool(Tool):
     name = "pdf_extract"
     description = "解析 PDF 文件（简历/JD）并提取全部文本。"

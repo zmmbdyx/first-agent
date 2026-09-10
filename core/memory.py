@@ -4,7 +4,7 @@ import time
 import uuid
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Optional
 
 
 @dataclass
@@ -83,9 +83,11 @@ class Memory:
         return Session(id=uuid.uuid4().hex[:12], title=title[:40])
 
     def save(self, session: Session):
+        """落盘即加密（Fernet），密钥见 core/secure_store.py；兼容旧明文读取。
+        改动：原实现的这段说明被写在 return 之后（处于函数体中部），
+        既不是 docstring 也无法被 help() 看到，这里移到函数首行。"""
         if self.privacy_mode:
             return  # 隐私模式：不落盘
-        """落盘即加密（Fernet），密钥见 core/secure_store.py；兼容旧明文读取。"""
         from core import secure_store
         path = self.dir / f"{session.id}.json"
         secure_store.write_bytes(path, json.dumps(session.to_dict(), ensure_ascii=False,
@@ -110,7 +112,9 @@ class Memory:
             return None
 
     def compact(self, session: Session):
-        """上下文压缩：消息超限时把旧消息滚动摘要成 summary，保留近 12 条原文。"""
+        """上下文压缩：消息超限时把旧消息滚动摘要成 summary，保留近 12 条原文。
+        注意：summary 由 agent._react_payload/_finalize 注入执行与综合上下文
+        （改动：原实现只写不读，压缩后的历史实际被丢弃）。"""
         if len(session.messages) <= self.max_messages:
             return
         old = session.messages[:-12]

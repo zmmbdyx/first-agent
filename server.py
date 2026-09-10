@@ -7,13 +7,12 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config import load_config, ROOT
 from core.agent import JobAgent
-from tools.image_ocr import ImageOcrTool
 
 app = FastAPI(title="求职智囊 Agent")
 cfg = load_config()
@@ -30,7 +29,7 @@ def get_agent(session_id: str) -> JobAgent:
         a = _AGENTS.get(session_id)
         if a is None:
             if len(_AGENTS) >= _AGENT_CAP:  # 容量护栏：清最旧的 1/3
-                for sid in sorted(_AGENTS)[: _AGENT_CAP // 3]:
+                for sid in list(_AGENTS)[: _AGENT_CAP // 3]:  # dict保序=最先创建的先清
                     _AGENTS.pop(sid, None)
             a = JobAgent(cfg)
             _AGENTS[session_id] = a
@@ -39,6 +38,43 @@ def get_agent(session_id: str) -> JobAgent:
 
 _RUNNING: dict = {}   # session_id -> bool，防并发执行
 _CURRENT_MODEL = {"name": cfg.model or (cfg.models[0] if cfg.models else "")}
+
+# 共享工具箱：健康检查/OCR等无状态操作专用，不占用会话池容量
+_shared_agent: JobAgent | None = None
+_SHARED_AGENT_LOCK = threading.Lock()
+
+
+def shared_agent() -> JobAgent:
+    """懒加载共享 Agent。
+    改动：原实现没有加锁，HTTP 线程池下首次并发请求会各自构造一个 JobAgent
+    （重复加载工具箱/覆盖全局引用），这里用锁保证只构造一次。"""
+    global _shared_agent
+    if _shared_agent is None:
+        with _SHARED_AGENT_LOCK:
+            if _shared_agent is None:
+                _shared_agent = JobAgent(cfg)
+    return _shared_agent
+
+
+class ReportStaticFiles(StaticFiles):
+    """只允许通过 /files 访问 data/reports/ 下由本服务生成的报告与图表。
+    改动：原实现把整个项目根目录挂成静态目录（StaticFiles(directory=ROOT_PATH)），
+    实测 GET /files/.env 可下载含 LLM_API_KEY 的配置文件、GET /files/data/.key
+    可下载会话/材料加密密钥、/files/data/sessions/*.json 可下载全部会话存档、
+    /files/core/*.py 可下载源码——属于敏感信息直接外泄。改为白名单前缀校验，
+    与前端约定一致（utils.js 只把 data/ 开头的路径映射到 /files/）。"""
+
+    ALLOW_PREFIX = "data/reports"
+
+    async def get_response(self, path: str, scope):
+        import posixpath
+        # 归一化并剥离 .. / 反斜杠，避免用 data/reports/../../.env 绕过白名单
+        norm = posixpath.normpath("/" + str(path).replace("\\", "/")).lstrip("/")
+        if norm != self.ALLOW_PREFIX and not norm.startswith(self.ALLOW_PREFIX + "/"):
+            return PlainTextResponse("Not Found", status_code=404)
+        return await super().get_response(path, scope)
+
+
 ROOT_PATH = Path(ROOT)
 RESUME_DIR = ROOT_PATH / "data" / "resumes"
 UPLOAD_DIR = ROOT_PATH / "data" / "uploads"
@@ -60,8 +96,8 @@ def health():
     return {"provider": cfg.provider, "model": cfg.model,
             "base_url": cfg.base_url,
             "fallback_model": getattr(cfg, "fallback_model", "") or None,
-            "tools": list(get_agent("health").registry.tools.keys()),
-            "tool_costs": {t.name: t.cost for t in get_agent("health").registry.tools.values()},
+            "tools": list(shared_agent().registry.tools.keys()),
+            "tool_costs": {t.name: t.cost for t in shared_agent().registry.tools.values()},
             "ocr_ready": importlib.util.find_spec("rapidocr_onnxruntime") is not None,
             "encrypted_storage": secure_store.enabled(),
             "cache": disk_cache.stats()}
@@ -135,7 +171,7 @@ async def ocr_image(file: UploadFile = File(...)):
     save = UPLOAD_DIR / f"jd_{time.strftime('%Y%m%d_%H%M%S')}{ext}"
     from core import secure_store
     secure_store.write_bytes(save, data)  # 截图落盘即加密
-    result = get_agent("shared-ocr").registry.call("image_ocr", {"path": str(save)})
+    result = shared_agent().registry.call("image_ocr", {"path": str(save)})
     if not result.ok:
         return JSONResponse({"error": result.error}, status_code=422)
     return {"ok": True, "text": result.data["text"], "chars": result.data["chars"],
@@ -185,7 +221,7 @@ def select_model(req: ModelReq):
 
 class ChatReq(BaseModel):
     session_id: str = ""
-    message: str
+    message: str = Field(..., max_length=32000)   # 防超长输入打爆 Token/DoS
     resume_path: str = ""   # 简历库中选中的简历，随消息生效
 
 
@@ -244,7 +280,9 @@ async def chat(req: ChatReq):
 
 @app.get("/api/session/{sid}")
 def get_session(sid: str):
-    s = memory.load(sid)
+    # 改动：原实现调用未定义的全局 memory，实测 GET /api/session/xxx 直接 NameError→500；
+    # 改为通过共享 Agent 的 Memory 实例读取（与会话池同一存储目录）。
+    s = shared_agent().memory.load(sid)
     if not s:
         return JSONResponse({"error": "会话不存在"}, status_code=404)
     return s.to_dict()
@@ -256,7 +294,7 @@ def delete_session(sid: str):
     safe = Path(sid).name
     if not re.fullmatch(r"[0-9a-f]{6,16}", safe):
         return JSONResponse({"error": "会话ID不合法"}, status_code=400)
-    p = get_agent("del").memory.dir / f"{safe}.json"
+    p = shared_agent().memory.dir / f"{safe}.json"
     if not p.exists():
         return JSONResponse({"error": "会话不存在"}, status_code=404)
     p.unlink()
@@ -269,7 +307,9 @@ def index():
 
 
 app.mount("/static", StaticFiles(directory=ROOT_PATH / "static"), name="static")
-app.mount("/files", StaticFiles(directory=ROOT_PATH), name="files")
+# 改动：不再把项目根目录整体暴露为静态目录（见 ReportStaticFiles 的说明），
+# 仅放行 data/reports/ 下的生成物（图表、交互式HTML、报告正文）。
+app.mount("/files", ReportStaticFiles(directory=ROOT_PATH), name="files")
 
 
 if __name__ == "__main__":

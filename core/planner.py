@@ -1,7 +1,7 @@
 """任务规划模块：LLM 规划 + JSON 校验 + 兜底模板规划（mock 模式 / LLM 规划失败时）。"""
 import json
 import re
-from typing import List
+from typing import List, Tuple
 
 from config import Config
 from core.memory import Task
@@ -12,7 +12,7 @@ ROLE_KEYWORDS = ["产品经理", "算法工程师", "后端开发", "前端开�
                  "大模型", "机器学习", "运营", "测试", "运维", "人力资源", "UI设计", "销售"]
 
 
-def build_fallback_plan(facts: dict, cfg: Config) -> (str, List[Task]):
+def build_fallback_plan(facts: dict, cfg: Config) -> Tuple[str, List[Task]]:
     """确定性兜底计划：材料齐全走标准分析链路；缺材料先 ask_user。
     JD 已是纯文本（粘贴/OCR）时不再生成"读取文件"任务，直接从结构化分析开始。"""
     from tools.file_tools import default_resume_path
@@ -84,10 +84,24 @@ def validate_plan(data: dict, cfg: Config) -> List[Task]:
         bad = [d for d in t.depends_on if d not in ids]
         if bad:
             raise ValueError(f"任务 {t.id} 依赖不存在: {bad}")
+    # 改动：原实现只校验依赖「引用存在」，不查环。出现 t1↔t2 互依赖时两者永远不会
+    # 进入 runnable 队列，会以 pending 状态残留（报告里出现"僵尸任务"）；这里做一次
+    # 拓扑可达性检查，有环即判计划非法，由 _make_plan 回退到确定性模板计划。
+    resolved, progress = set(), True
+    while progress:
+        progress = False
+        for t in tasks:
+            if t.id not in resolved and all(d in resolved for d in t.depends_on):
+                resolved.add(t.id)
+                progress = True
+    if len(resolved) != len(tasks):
+        cycle = ", ".join(t.id for t in tasks if t.id not in resolved)
+        raise ValueError(f"任务依赖存在环（永远无法执行）: {cycle}")
     return tasks
 
 
-def plan_with_llm(llm, registry: ToolRegistry, facts: dict, user_msg: str, cfg: Config) -> (str, List[Task]):
+def plan_with_llm(llm, registry: ToolRegistry, facts: dict, user_msg: str,
+                  cfg: Config) -> Tuple[str, List[Task]]:
     system = PLANNER_SYSTEM.format(tool_schema=registry.prompt_schema(), max_tasks=cfg.max_tasks)
     material = json.dumps({"facts": facts, "user_message": user_msg[-1500:]}, ensure_ascii=False)
     data = llm.chat_json([{"role": "system", "content": system},

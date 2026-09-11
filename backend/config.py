@@ -39,8 +39,16 @@ def _ensure_utf8_stdout() -> None:
 
 _ensure_utf8_stdout()
 
-# .env 查找顺序：backend/.env、项目根 .env、项目根 .env.local（后者覆盖前者）
+# .env 查找顺序：backend/.env、项目根 .env、项目根 .env.local
+# 注意：pydantic-settings 对多个 env_file 是**后者覆盖前者**，因此项目根的 .env
+# 优先级高于 backend/.env。多份 .env 同时存在时，"改了不生效"是必然的困惑来源，
+# 所以下面把实际生效的文件打印出来。
 _ENV_FILES = (BACKEND_DIR / ".env", PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.local")
+
+
+def loaded_env_files() -> list[str]:
+    """实际存在的 .env 文件（按优先级从低到高）。供启动日志诊断用。"""
+    return [str(p) for p in _ENV_FILES if p.is_file()]
 
 _NUM_DEFAULTS = {
     "max_react_steps": 5, "llm_max_retries": 3, "tool_max_retries": 2, "max_tasks": 6,
@@ -297,11 +305,24 @@ def _cached() -> Settings:
 
 
 def load_config() -> Settings:
-    """读取配置（进程内缓存）。"""
-    return _cached()
+    """读取配置（进程内缓存）。首次加载时打印生效的 .env 文件，便于排查"改了不生效"。"""
+    first = _cached.cache_info().currsize == 0
+    cfg = _cached()
+    if first:
+        files = loaded_env_files()
+        if files:
+            # 优先级从低到高：最后一个是最终生效的
+            print("[config] 生效的配置文件（后者覆盖前者）: "
+                  + " < ".join(Path(f).name if Path(f).parent == PROJECT_ROOT else f
+                               for f in files))
+        else:
+            print("[config] 未发现 .env 文件：使用环境变量与默认值"
+                  "（未配置 LLM 凭据时会进入离线 mock 模式）")
+    return cfg
 
 
 # 旧代码 `from config import Config` 的类型注解兼容
 Config = Settings
 
-__all__ = ["Settings", "Config", "load_config", "ROOT", "BACKEND_DIR", "PROJECT_ROOT"]
+__all__ = ["Settings", "Config", "load_config", "loaded_env_files", "ROOT", "BACKEND_DIR",
+           "PROJECT_ROOT"]

@@ -122,9 +122,9 @@ export default function CodeBlock({ code, language, inline, className }: CodeBlo
         customStyle={{
           margin: 0,
           background: 'transparent',
-          padding: '10px 12px',
-          fontSize: 12,
-          lineHeight: 1.6,
+          padding: '12px 14px',
+          fontSize: 14,
+          lineHeight: 1.65,
         }}
         codeTagProps={{ style: { fontFamily: 'inherit' } }}
         wrapLongLines={false}

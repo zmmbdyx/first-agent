@@ -39,12 +39,16 @@ export default {
         mono: ['SFMono-Regular', 'JetBrains Mono', 'Menlo', 'Consolas',
                'Liberation Mono', 'monospace'],
       },
+      // 字号阶梯：对齐主流对话式网页端的可读性档位（正文 15px / 次级 13px / 标签 12px）。
+      // 原先 10–13px 的开发工具密度在真实阅读场景下偏小，用户反馈"字太小"即源于此，
+      // 因此整体上调一档并同步放大行高（行高不跟着涨会让中文显得更挤）。
       fontSize: {
-        '2xs': ['10px', { lineHeight: '14px' }],
-        xs: ['11px', { lineHeight: '16px' }],
-        sm: ['12px', { lineHeight: '18px' }],
-        base: ['13px', { lineHeight: '20px' }],
-        md: ['14px', { lineHeight: '22px' }],
+        '2xs': ['12px', { lineHeight: '17px' }],
+        xs: ['13px', { lineHeight: '19px' }],
+        sm: ['14px', { lineHeight: '21px' }],
+        base: ['15px', { lineHeight: '24px' }],
+        md: ['16px', { lineHeight: '26px' }],
+        lg: ['18px', { lineHeight: '28px' }],
       },
       spacing: {
         rail: '56px',

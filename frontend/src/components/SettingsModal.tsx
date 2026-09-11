@@ -186,7 +186,7 @@ export default function SettingsModal() {
         aria-modal="true"
         aria-label="设置"
         onClick={(e) => e.stopPropagation()}
-        className="pf-card flex h-[420px] w-full max-w-[640px] animate-pf-fade-in overflow-hidden bg-pf-elevated"
+        className="pf-card flex h-[480px] w-full max-w-[680px] animate-pf-fade-in overflow-hidden bg-pf-elevated"
       >
         {/* 左侧竖排 Tab */}
         <nav className="flex w-[168px] shrink-0 flex-col border-r border-pf-border bg-pf-bg px-1.5 py-2">

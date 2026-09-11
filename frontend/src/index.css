@@ -62,8 +62,9 @@ body {
   margin: 0;
   background: var(--pf-bg);
   color: var(--pf-text);
-  font-size: 13px;
-  line-height: 20px;
+  /* 与 tailwind 的 text-base（15px/24px）对齐：未显式指定字号的文本也保持同一档位 */
+  font-size: 15px;
+  line-height: 24px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -163,10 +164,10 @@ textarea {
   @apply mb-2 mt-4 font-semibold text-pf-text;
 }
 .pf-md h1 {
-  @apply text-md;
+  @apply text-lg;
 }
 .pf-md h2 {
-  @apply text-base;
+  @apply text-md;
 }
 .pf-md h3 {
   @apply text-base text-pf-muted;
@@ -188,19 +189,19 @@ textarea {
   @apply text-pf-text underline decoration-pf-border-strong underline-offset-2;
 }
 .pf-md code {
-  @apply rounded bg-pf-surface px-1 py-0.5 font-mono text-xs;
+  @apply rounded bg-pf-surface px-1 py-0.5 font-mono text-sm;
 }
 .pf-md pre {
-  @apply my-2 overflow-x-auto rounded-md border border-pf-border bg-pf-surface p-2.5;
+  @apply my-2 overflow-x-auto rounded-md border border-pf-border bg-pf-surface p-3;
 }
 .pf-md pre code {
-  @apply bg-transparent p-0 text-xs;
+  @apply bg-transparent p-0 text-sm;
 }
 .pf-md blockquote {
   @apply my-2 border-l-2 border-pf-border-strong pl-3 text-pf-muted;
 }
 .pf-md table {
-  @apply my-2 w-full border-collapse text-xs;
+  @apply my-2 w-full border-collapse text-sm;
 }
 .pf-md th,
 .pf-md td {

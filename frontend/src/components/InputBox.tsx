@@ -54,7 +54,9 @@ const EFFORTS: { id: ReasoningEffort; label: string }[] = [
 /** 自动增高区间（行）：2 行起步，10 行封顶 */
 const MIN_ROWS = 2
 const MAX_ROWS = 10
-const LINE_HEIGHT = 20
+// 与 textarea 的 `leading-6`（24px）保持一致：这里算高度、CSS 决定实际行高，
+// 两者不同步会导致输入框行数算错（文字被裁或底部留白）
+const LINE_HEIGHT = 24
 const BOX_PADDING = 16
 
 export default function InputBox({
@@ -362,7 +364,7 @@ export default function InputBox({
 
         <textarea
           ref={taRef}
-          className="pf-input flex-1 resize-none py-1.5 leading-5"
+          className="pf-input flex-1 resize-none py-1.5 text-base leading-6"
           style={{ height: MIN_ROWS * LINE_HEIGHT + BOX_PADDING }}
           value={text}
           placeholder="描述任务，或输入 @ 引用工作区文件…"

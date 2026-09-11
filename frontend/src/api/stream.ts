@@ -7,6 +7,7 @@
  * - 只认 `data` 里的 JSON，`event` 名与 `data.type` 一致（契约 2.1）；
  * - heartbeat 事件用于保活，不打断流。
  */
+import { authHeaders } from '@/lib/auth'
 import type { RunEvent, RunRequest } from '@/types'
 
 export interface StreamHandlers {
@@ -43,7 +44,8 @@ export function runAgentStream(req: RunRequest, handlers: StreamHandlers): Strea
     try {
       const res = await fetch('/api/agent/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        // SSE 走 fetch，与 REST 同样是普通请求，因此带标准的 Authorization 头（契约 §7）
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...authHeaders() },
         body: JSON.stringify(req),
         signal: controller.signal,
       })

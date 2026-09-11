@@ -28,6 +28,10 @@ jobs:
         run: python tests/test_smoke.py
       - name: 结构化校验测试（规划/ReAct 决策的 Pydantic 边界与降级）
         run: python tests/test_schemas.py
+      - name: 黄金集质量回归（20 条用例 + 4 项质量指标）
+        run: python tests/golden_eval.py
+      - name: 安全加固验收（鉴权 / 租户隔离 / 运行预算 / 队列上限）
+        run: python scripts/smoke_auth.py
       - name: 后端导入自检（配置层 + LangGraph 编排层）
         run: |
           python -c "from config import load_config; from core.agent import JobAgent; print('backend import ok')"

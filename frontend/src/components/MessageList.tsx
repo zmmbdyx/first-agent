@@ -8,8 +8,10 @@
  *   用户上滑查看历史时保持视口不动（否则流式输出会把用户"拽"回底部）。
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import FeedbackBar from '@/components/FeedbackBar'
 import MarkdownView from '@/components/MarkdownView'
 import { IconAlert, IconX } from '@/components/icons'
+import { useAppStore } from '@/store/useAppStore'
 import type { ChatMessage } from '@/types'
 
 export interface MessageListProps {
@@ -29,6 +31,8 @@ export default function MessageList({
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
+  // 反馈需要会话 id 才能落库；会话为空（未建会话）时不渲染反馈条，避免发出无主请求
+  const sessionId = useAppStore((s) => s.activeSessionId)
   // 用户手动上滑后给出"回到底部"的入口
   const [atBottom, setAtBottom] = useState(true)
   // 关闭告警条只影响本组件：记住"已关闭的那条错误"，错误内容变化后会自动重新出现
@@ -108,6 +112,10 @@ export default function MessageList({
               message={msg}
               // 只有最后一条非用户消息在流式期间显示光标
               showCursor={streaming && i === lastAssistantIndex}
+              // 反馈条只挂最后一条 Agent 回答下方：会话级反馈需要一个明确的评价对象
+              feedback={i === lastAssistantIndex && sessionId ? (
+                <FeedbackBar sessionId={sessionId} runId={msg.run_id} messageTs={msg.ts} />
+              ) : null}
             />
           ))}
         </div>
@@ -132,7 +140,12 @@ export default function MessageList({
   )
 }
 
-function MessageRow({ message, showCursor }: { message: ChatMessage; showCursor: boolean }) {
+function MessageRow({ message, showCursor, feedback }: {
+  message: ChatMessage
+  showCursor: boolean
+  /** 仅在最后一条 Agent 消息上传入，其余为 null */
+  feedback?: React.ReactNode
+}) {
   if (message.role === 'user') {
     return (
       <div className="flex justify-end">
@@ -161,6 +174,7 @@ function MessageRow({ message, showCursor }: { message: ChatMessage; showCursor:
           aria-hidden="true"
         />
       )}
+      {feedback}
     </div>
   )
 }

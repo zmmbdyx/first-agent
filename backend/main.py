@@ -11,13 +11,15 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import PROJECT_ROOT, load_config
 from services.workspace_service import NotFoundError, WorkspaceError
+
+import observability as obs
 
 cfg = load_config()
 
@@ -51,7 +53,21 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    obs.bootstrap()   # 预置 0 值指标：抓取端在首个任务前也能确认服务存活
+
     print(f"[startup] {cfg.app_name} 就绪 · provider={cfg.provider} · model={cfg.model or '(未配置)'}")
+
+    # 鉴权状态必须显式可见：开关开着却没配令牌属于配置错误（fail-closed），
+    # 这类问题若只体现在"所有请求 401"上，排查成本极高。
+    if cfg.auth_misconfigured:
+        print("[startup] !! 严重配置错误：AUTH_ENABLED=true 但未配置 API_KEYS / AUTH_TOKEN，"
+              "所有 API 请求都会被拒绝。请配置后重启。")
+    elif cfg.auth_required:
+        print(f"[startup] 鉴权已启用：{len(cfg.key_map)} 个令牌 · owner 数 "
+              f"{len(set(cfg.key_map.values()))}")
+    else:
+        print("[startup] 鉴权未启用（AUTH_ENABLED=false）：仅适合本机单用户使用，"
+              "对外暴露前请开启并配置 API_KEYS")
     yield
     print("[shutdown] 服务退出")
 
@@ -59,6 +75,36 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=f"{cfg.app_name} API", version="1.0.0", lifespan=lifespan,
               description="求职业务域智能体平台后端（会话 / 工具 / 工作区 / 文件 / Git / Agent SSE）")
 
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """全局鉴权（fail-closed）：/api/* 与 /metrics 默认受保护。
+
+    为什么放在中间件而不是逐个路由加依赖：新增路由若忘记加依赖就会静默裸奔，
+    而中间件是"默认拒绝、显式放行"，这个方向上的错误更安全。
+    校验通过后把 owner 写进 request.state，业务路由用 `current_owner` 依赖读取。
+
+    注册顺序（重要）：Starlette 的 `add_middleware` 后加入者位于外层，因此本中间件
+    必须写在 `CORSMiddleware` **之前**——这样 CORS 才在最外层，401/403 响应同样带
+    CORS 头（否则浏览器只看到网络错误、拿不到原因），预检 OPTIONS 也会被 CORS 先短路。
+    """
+    from security import authorize_request, is_public
+    path = request.url.path
+    if not is_public(path, cfg):
+        try:
+            request.state.owner = authorize_request(request)
+        except HTTPException as exc:
+            obs.inc("pathforge_auth_failures_total", path=path, status=exc.status_code)
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
+                                headers=getattr(exc, "headers", None) or {})
+        except Exception as e:  # noqa: BLE001 — 鉴权自身异常也必须拒绝，不能放行
+            obs.inc("pathforge_auth_failures_total", path=path, status=500)
+            return JSONResponse({"detail": f"鉴权失败: {type(e).__name__}"}, status_code=500)
+    else:
+        request.state.owner = getattr(request.state, "owner", "default")
+    return await call_next(request)
+
+
+# 必须在鉴权中间件之后注册（后加入者在外层），保证 401 响应带 CORS 头
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(cfg.cors_origins or []),
@@ -66,6 +112,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> PlainTextResponse:
+    """Prometheus 文本格式指标（受鉴权中间件保护）。"""
+    from observability import render_prometheus
+    return PlainTextResponse(render_prometheus(),
+                             media_type="text/plain; version=0.0.4; charset=utf-8")
+
 
 from api import router as api_router, ws as ws_router  # noqa: E402  (需在 cfg/app 之后)
 

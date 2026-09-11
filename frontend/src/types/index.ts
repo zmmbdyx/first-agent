@@ -228,6 +228,26 @@ export interface ModelInfo {
   provider: string
 }
 
+/** `GET /api/sessions/{id}/feedback` 的列表项（契约 HARDENING §4） */
+export interface FeedbackItem {
+  id: string
+  session_id: string
+  run_id: string
+  rating: number
+  comment: string
+  created_at: string
+  /** 契约 §3 的 feedback 表含 message_ts；用于把评分回填到具体某条消息 */
+  message_ts?: number
+}
+
+/** `POST /api/sessions/{id}/feedback` 的请求体（rating 1–5，其余可省） */
+export interface FeedbackBody {
+  rating: number
+  comment?: string
+  run_id?: string
+  message_ts?: number
+}
+
 export interface RunRequest {
   task: string
   session_id: string

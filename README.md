@@ -284,6 +284,15 @@ python backend/cli.py                                                           
 | `SANDBOX_ENABLED` / `SANDBOX_TIMEOUT` / `SANDBOX_MAX_OUTPUT` | `true` / `300` / `65536` | 沙箱开关、超时、输出截断 |
 | `WORKSPACE_ROOT` | `./workspaces` | 工作区根目录（Agent 文件读写被限定在此） |
 | `ALLOW_FULL_ACCESS` | `false` | 是否允许「完全访问」权限模式 |
+| `AUTH_ENABLED` | `false` | **对外暴露时必须开启**：`true` 时 `/api/*`、`/ws/*`、`/metrics` 均需凭据 |
+| `API_KEYS` | 空 | 令牌→归属者映射（`token1=alice,token2=bob`）；owner 决定可见范围 |
+| `AUTH_TOKEN` | 空 | 单令牌快捷方式（owner 固定 `default`），`API_KEYS` 为空时生效 |
+| `AUTH_HEADER` | `Authorization` | 令牌请求头名（`Authorization: Bearer` 与 `X-API-Key` 都接受） |
+| `MAX_TOKENS_PER_RUN` | `0` | 单次运行 token 上限（0=不限）；超限中止并置为 `interrupted` |
+| `MAX_QUEUE_SIZE` | `32` | 准入队列上限，超出立即返回 429（不再排队堆积） |
+| `CONTEXT_WINDOW` | `65536` | 真实模型上下文窗口（用于占用率与提示词预算） |
+| `PROMPT_VERSION` | `v1` | 提示词版本号，随 run 落库便于回归归因 |
+| `LOG_JSON` | `false` | `true` 时输出 JSON 结构化日志 |
 | `SEARCH_API_KEY` / `SEARCH_API_URL` | 空 | 可选检索端点（留空走免密钥公开检索通道） |
 | `DATA_KEY` | 空 | 落盘加密密钥（留空自动生成 `data/.key`，该文件不入库） |
 
@@ -334,8 +343,14 @@ python backend/cli.py                                                           
 | `GET` `POST` `DELETE` | `/api/resumes` … | 简历库管理 |
 | `POST` | `/api/upload` / `/api/ocr` | 材料上传 / 截图文字识别 |
 | `GET` `POST` | `/api/models` / `/api/model/select` | 模型列表 / 切换 |
-| `GET` | `/api/health` | 依赖健康状态（数据库 / Redis / 向量库 / 沙箱） |
+| `GET` `POST` | `/api/sessions/{id}/feedback` | 用户评分与备注（1–5 星，P1-4 反馈闭环） |
+| `GET` | `/api/health` | 依赖健康状态（数据库 / Redis / 向量库 / 沙箱）**公开**（供探针） |
+| `GET` | `/metrics` | Prometheus 文本指标（运行数/失败数/超时数/队列长度/活跃 run/token/上下文占用/缓存命中率） |
 | `WS` | `/ws/agent/{session_id}` | 工具状态与指标实时推送 |
+
+> **鉴权**：`AUTH_ENABLED=true` 时，上表除 `/api/health` 外全部需要凭据
+> （`Authorization: Bearer <token>` 或 `X-API-Key: <token>`；WebSocket 用 `?token=`，
+> 只读 GET 也允许查询参数以便 `<img src>` 直链预览）。失败返回 401（未带凭据）或 403（凭据无效）。
 
 ### SSE 事件
 
@@ -424,13 +439,17 @@ python backend/cli.py                                                           
 python tests/test_smoke.py          # 77 项：规划/工具/记忆/加密/缓存/故障注入/对抗样本
 python tests/test_schemas.py        # 33 项：LLM 输出作为不可信输入的边界与降级
 python tests/batch_eval.py          # 10 份 JD 全链路批量评测
+python tests/golden_eval.py         # 黄金集质量回归：20 条用例 + 4 项质量指标（成功率/步骤效率/合规率/追问正确率）
 
 # 端到端接口（含真实 SSE 流与 WebSocket）
 set PYTHONPATH=backend              # Windows；Linux/macOS 用 export
 python scripts/smoke_api.py         # 32 项：契约端点 + 事件序列 + 路径穿越防护
 
+# 安全加固验收（鉴权 / 租户隔离 / 运行预算 / 队列上限）
+python scripts/smoke_auth.py        # 31 项：401/403、跨 owner 隔离、超预算中止、队列 429、WS 鉴权
+
 # 交互层实机校验（需后端已启动且前端已构建）
-python scripts/ui_check.py          # 27 项：真实点击侧栏/设置四 Tab/右侧四面板/输入区
+python scripts/ui_check.py          # 33 项：真实点击侧栏/设置四 Tab/右侧四面板/输入区/令牌/反馈
 
 # PostgreSQL 代码路径（无需数据库实例也能跑方言级校验）
 python scripts/check_postgres_path.py   # 8 项：JSONB / 时区列 / 主键 / 索引
@@ -440,19 +459,53 @@ python scripts/smoke_api.py --use-env-db   # 端到端跑在 DATABASE_URL 指向
 # 脱敏与合规审计
 python scripts/audit_secrets.py --repo .    # 密钥/私有端点/个人敏感信息（含全历史）
 python scripts/audit_brand.py --repo .      # 第三方品牌字样（含全历史）
+python scripts/audit_brand.py --selftest    # 品牌规则表自检（防规则被削弱）
 
 # 前端
 cd frontend && npx tsc --noEmit && npm run build
 ```
 
-CI（`.github/workflows/ci.yml`）分五个作业：后端测试、前端构建与类型检查、
-交互层实机校验、PostgreSQL 路径（带真实 PG 服务容器）、脱敏审计。
+CI（`.github/workflows/ci.yml`）分五个作业：后端测试（含黄金集质量回归与安全加固验收）、
+前端构建与类型检查、交互层实机校验、PostgreSQL 路径（带真实 PG 服务容器）、脱敏审计。
+
+> **关于 `--real`**：`tests/golden_eval.py` 默认在离线 mock 下运行，属于**确定性回归**
+> （防报告结构、流程与安全边界退化），**不等于真实模型的质量评测**。接入真实端点后加
+> `--real` 可跑同一套用例，脚本会列出本次报告清单供人工打分；真实质量应结合
+> `POST /api/sessions/{id}/feedback` 采集的用户评分一起看。
 
 > **为什么需要 `ui_check.py`**：类型检查与构建通过并不代表交互接通——
 > 实测中"打开设置弹窗整页崩成空白"（后端 `/api/health` 返回结构化对象，前端按字符串渲染）
 > 这类缺陷只有在真实点击时才会暴露。该脚本用 DOM 状态 + 网络请求双重断言，
 > 覆盖会话置顶/重命名/删除、设置四 Tab、文件树展开与预览、Git 勾选暂存、
 > `@` 引用浮层、参数下拉、布局折叠与深/浅色切换。
+
+---
+
+## 安全与多租户
+
+> 这一节是本项目最近一轮**安全加固**的结果；每一项都有对应的自动化验收（`scripts/smoke_auth.py`，31 项）。
+
+| 能力 | 实现 | 验收方式 |
+|---|---|---|
+| **认证** | 全局 HTTP 中间件（fail-closed）：`/api/*` 与 `/metrics` 默认需凭据；`/api/health` 公开供探针 | 无令牌 401 / 错令牌 403 / 带令牌 200 |
+| **租户隔离** | `sessions.owner` 维度贯穿会话域：列表过滤、按 ID 取用一律按"不属于我 = 不存在"处理（返回 404 而非 403，避免探测存在性） | alice 建会话，bob 列表看不到、按 ID 读/改/删全部 404 |
+| **记忆隔离边界** | 会话、反馈、运行记录按 owner 隔离；**工作区与长期记忆当前仍是全局共享**（见下方"已知取舍"） | 反馈读写在跨 owner 时 404 |
+| **运行预算** | `MAX_TOKENS_PER_RUN` 超限即中止：发 `error` + `interrupted`，已产出内容照常落库 | 预算置 1 后运行必然被中止，run 状态归档为 `interrupted` |
+| **运行超时** | `TASK_TIMEOUT` 语义修正为**单次运行墙钟超时**（此前只作用于沙箱单命令）；超时同样发 `error` + `interrupted` | 由预算用例与超时路径共同覆盖 |
+| **队列上限** | `MAX_QUEUE_SIZE`：准入队列满时在**建立 SSE 之前**返回 429 + `Retry-After` | 占满队列后 POST 返回 429 |
+| **注入边界** | `core/prompts.py::wrap_untrusted()` 把工具输出、抓取内容、用户材料包进 `<user_data source="…" trust="untrusted">`，并转义伪造定界符防止提前闭合；ReAct 观察值、产物摘要、综合素材三个入口全部接入 | 定界符转义单测（伪造闭合标签被中和） |
+| **可观测** | `/metrics`（Prometheus 文本）+ 结构化日志（`LOG_JSON=true`）+ `runs.prompt_version` 归因 | metrics 端点返回预置 0 值指标，抓取端可判存活 |
+| **数据删除** | `DELETE /api/sessions/{id}` 连带删除消息/任务/工具调用/轨迹/运行/**反馈**记录 | 删除后历史与反馈均不可读 |
+
+**已知取舍（有意保留，非遗漏）**
+
+- **工作区与长期记忆仍是全局的**：多用户部署前需要把 `owner` 继续下沉到 `profile`/向量集合与
+  工作区表；当前已在数据模型与路由层预留 owner 维度，改动是加法而非重构。
+- **只读 GET 允许 `?token=`**：`<img src>` / `<iframe>` / 直链下载无法携带自定义请求头，
+  若一律拒绝则图片与 PDF 预览在开启鉴权后必然 401。代价是令牌可能进入访问日志，
+  因此写操作严格要求请求头（避免"链接即操作"）。需要更强隔离时，应改为短期签名 URL。
+- **未做逐工具调用确认**：权限模式是 run 级（只读/工作区可写/完全访问），
+  高危工具调用前的人工确认需要先定义 UX 与授权记忆策略，本轮未做。
 
 ---
 

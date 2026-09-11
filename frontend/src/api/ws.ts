@@ -2,6 +2,7 @@
  * WebSocket 客户端：接收工具调用状态与实时指标的推送（与 SSE 并行的第二条通道）。
  * 设计原则：WS 只是增强——连不上或断开都不得影响 SSE 主链路，因此全部错误静默处理。
  */
+import { withAuth } from '@/lib/auth'
 import type { RunEvent } from '@/types'
 
 export interface SocketHandlers {
@@ -31,7 +32,9 @@ export class RunSocket {
   private open() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     try {
-      this.ws = new WebSocket(`${proto}://${location.host}/ws/agent/${this.sessionId}`)
+      // WebSocket 构造器不支持自定义请求头，令牌只能走查询参数（withAuth 负责拼接）；
+      // 每次重连重新取令牌，用户在设置里补填令牌后无需刷新页面即可生效
+      this.ws = new WebSocket(withAuth(`${proto}://${location.host}/ws/agent/${this.sessionId}`))
     } catch {
       this.scheduleRetry()
       return

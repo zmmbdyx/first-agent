@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from models.base import Base, JSONType, gen_id, iso, utcnow
 from models.custom_tool import CustomTool
+from models.feedback import Feedback
 from models.message import Message
 from models.run import Run
 from models.session import Session
@@ -18,5 +19,5 @@ from models.workspace import Workspace
 __all__ = [
     "Base", "JSONType", "gen_id", "iso", "utcnow",
     "Session", "Message", "Run", "Task", "ToolCall",
-    "TrajectoryNode", "Workspace", "CustomTool",
+    "TrajectoryNode", "Workspace", "CustomTool", "Feedback",
 ]

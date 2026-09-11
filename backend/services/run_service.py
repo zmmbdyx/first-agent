@@ -25,6 +25,8 @@ from core.graph import astream_run
 from core.memory import Session
 from core.presets import apply_preset
 
+import observability as obs
+
 from services.broadcast import broadcast
 
 # 单进程内同时在跑的 run 数上限（超出即排队）；可用 MAX_CONCURRENT_RUNS 调整
@@ -46,15 +48,22 @@ class RunServiceError(RuntimeError):
     """调用方可见的错误（API 层据此映射状态码）。"""
 
 
+class QueueFullError(RunServiceError):
+    """准入队列已满（API 层映射为 429）。"""
+
+
 class _Admission:
     """优先级准入闸门：小优先级先执行，同优先级按到达顺序（FIFO）。
 
     为什么不用纯 asyncio.Semaphore：Semaphore 是 FIFO 的，无法表达优先级；
     这里的等待队列显式排序，且 release 时重新挑选最优先的等待者。
+    队列有上限（`max_queue`）：无界队列在接口被刷时会把内存和 Future 一起堆爆，
+    超限时快速失败（429）比"排到天荒地老"更诚实。
     """
 
-    def __init__(self, limit: int = DEFAULT_CONCURRENCY) -> None:
+    def __init__(self, limit: int = DEFAULT_CONCURRENCY, max_queue: int = 32) -> None:
         self.limit = max(1, int(limit or DEFAULT_CONCURRENCY))
+        self.max_queue = max(1, int(max_queue or 32))
         self._active: Dict[str, int] = {}
         self._waiting: list[tuple[int, int, str, asyncio.Future]] = []
         self._seq = 0
@@ -64,11 +73,24 @@ class _Admission:
     def active_count(self) -> int:
         return len(self._active)
 
+    @property
+    def waiting_count(self) -> int:
+        return len(self._waiting)
+
+    def capacity_error(self) -> str:
+        """未超限返回空串；超限返回可读原因（供 API 提前 429 与流内兜底共用）。"""
+        if self.waiting_count >= self.max_queue:
+            return (f"执行队列已满（等待 {self.waiting_count}/{self.max_queue}，"
+                    f"并发上限 {self.limit}），请稍后重试")
+        return ""
+
     async def acquire(self, run_id: str, priority: int = 5) -> None:
         async with self._lock:
             if len(self._active) < self.limit:
                 self._active[run_id] = max(0, min(int(priority or 5), 9))
                 return
+            if len(self._waiting) >= self.max_queue:
+                raise QueueFullError(self.capacity_error() or "执行队列已满")
             self._seq += 1
             fut: asyncio.Future = asyncio.get_running_loop().create_future()
             self._waiting.append((max(0, min(int(priority or 5), 9)), self._seq, run_id, fut))
@@ -138,10 +160,23 @@ class RunService:
         self._agent_lock = threading.Lock()
         self._lock = threading.Lock()
         limit = int(getattr(self.cfg, "max_concurrent_runs", DEFAULT_CONCURRENCY) or DEFAULT_CONCURRENCY)
-        self._admission = _Admission(limit)
+        max_queue = int(getattr(self.cfg, "max_queue_size", 32) or 32)
+        self._admission = _Admission(limit, max_queue)
         self._snapshots = SnapshotStore(getattr(self.cfg, "sessions_dir", None))
 
     # ================= 控制面 =================
+    def precheck(self, req: Any) -> None:
+        """流开始前的快速失败检查（API 层在建立 SSE 之前调用）。
+
+        为什么需要单独一步：SSE 一旦开始输出就无法再改 HTTP 状态码，
+        队列满必须在此之前以 429 拒绝，而不是"先 200 再发一条错误事件"。
+        """
+        capacity = self._admission.capacity_error()
+        if capacity:
+            raise QueueFullError(capacity)
+        if not str(_pick(req, "task", "") or "").strip():
+            raise RunServiceError("task 不能为空")
+
     def interrupt(self, run_id: str) -> bool:
         """中断执行：排队中的直接出队；已在跑的取消其 asyncio 任务并落库为 interrupted。"""
         if self._admission.cancel(run_id):
@@ -200,8 +235,12 @@ class RunService:
                 "admission": self._admission.snapshot()}
 
     # ================= 数据面（SSE 数据源） =================
-    async def stream(self, req: Any) -> AsyncIterator[dict]:
-        """驱动一次运行并逐条产出契约事件。调用方（api/agent.py）负责包装成 SSE 帧。"""
+    async def stream(self, req: Any, owner: Optional[str] = None) -> AsyncIterator[dict]:
+        """驱动一次运行并逐条产出契约事件。调用方（api/agent.py）负责包装成 SSE 帧。
+
+        `owner` 是**认证归属者**（多租户隔离维度），与下面用于"会话占用"的局部变量
+        `holder` 不是一回事，故刻意不同名，避免后续维护者混淆两者。
+        """
         task_text = str(_pick(req, "task", "") or "").strip()
         if not task_text:
             yield {"type": "error", "message": "task 不能为空"}
@@ -218,7 +257,7 @@ class RunService:
         run_id = uuid.uuid4().hex[:12]
         acquired = False
         try:
-            session = await asyncio.to_thread(self._resolve_session, req, workspace, preset_id)
+            session = await asyncio.to_thread(self._resolve_session, req, workspace, preset_id, owner)
         except Exception as e:
             yield {"type": "error", "message": f"会话初始化失败: {e}"}
             return
@@ -227,26 +266,28 @@ class RunService:
         # 同一会话不允许并发执行：JobAgent 是实例态的（工具缓存/统计/当前会话），
         # 并发跑会把事件与会话状态互相污染。
         with self._lock:
-            owner = self._session_owner.get(session_id)
-            if owner:
+            holder = self._session_owner.get(session_id)
+            if holder:
                 yield {"type": "error",
-                       "message": f"该会话正在执行中（run {owner}），请等待完成或先中断"}
+                       "message": f"该会话正在执行中（run {holder}），请等待完成或先中断"}
                 return
             self._session_owner[session_id] = run_id
             self._runs[run_id] = {
                 "run_id": run_id, "session_id": session_id, "status": "queued",
+                "owner": owner or "default", "prompt_version": str(getattr(self.cfg, "prompt_version", "")),
                 "task": task_text[:2000], "preset": preset_id, "workspace": workspace,
                 "permission_mode": permission, "model": model or getattr(self.cfg, "model", ""),
                 "started_at": time.time(), "finished_at": None, "stats": {}, "error": "",
-                "_nodes": 0, "_tools": 0,
+                "_nodes": 0, "_tools": 0, "_tokens": 0,
             }
 
         try:
             # 用本服务生成的 run_id 登记：事件流、控制面与 runs 表三处共用同一 id，
             # 否则按 run_id 回写状态会找不到行（实测表现为 run 永远停在 queued）
             await asyncio.to_thread(self._register_run, run_id, session, task_text, preset_id,
-                                    workspace, permission, model)
+                                    workspace, permission, model, owner)
 
+            obs.inc("pathforge_runs_started_total", preset=preset_id, owner=owner or "default")
             yield {"type": "run_started", "run_id": run_id, "session_id": session_id,
                    "model": model or getattr(self.cfg, "model", "") or "mock", "preset": preset_id,
                    "permission_mode": permission, "workspace": workspace}
@@ -257,6 +298,8 @@ class RunService:
             pos = self._admission.position(run_id)
             yield {"type": "queue_position", "run_id": run_id,
                    "position": pos if pos > 0 else 0, "priority": priority}
+            obs.gauge("pathforge_queue_waiting", self._admission.waiting_count)
+            obs.gauge("pathforge_runs_active", self._admission.active_count)
 
             current = asyncio.current_task()
             if current is not None:
@@ -264,30 +307,58 @@ class RunService:
             await self._admission.acquire(run_id, priority)
             acquired = True
             self._mark(run_id, status="running")
+            obs.gauge("pathforge_runs_active", self._admission.active_count)
 
             cfg = self._tuned_cfg(preset_id, effort)
             agent = await asyncio.to_thread(self._agent_for, session_id)
             self._save_start_snapshot(session_id, run_id, session)
 
-            async for event in astream_run(agent, session, task_text, cfg,
-                                           run_id=run_id, preset=preset_id,
-                                           permission_mode=permission, workspace=workspace,
-                                           model=model, resume=resume, priority=priority,
-                                           snapshot_store=self._snapshots):
-                if not isinstance(event, dict):
-                    continue
-                self._observe(run_id, session_id, event)
-                yield event
+            # 运行级墙钟超时（评审 P1-1）：此前 TASK_TIMEOUT 只作用于沙箱单命令，
+            # 模型端点卡住时一次运行可以无限期占用并发额度并持续计费。
+            budget_hit = ""
+            try:
+                async with asyncio.timeout(max(1, int(getattr(cfg, "task_timeout", 300) or 300))):
+                    async for event in astream_run(agent, session, task_text, cfg,
+                                                   run_id=run_id, preset=preset_id,
+                                                   permission_mode=permission, workspace=workspace,
+                                                   model=model, resume=resume, priority=priority,
+                                                   snapshot_store=self._snapshots):
+                        if not isinstance(event, dict):
+                            continue
+                        budget_hit = self._observe(run_id, session_id, event)
+                        yield event
+                        if budget_hit:
+                            # 超预算：立刻停止继续驱动图（不再产生新的 LLM/工具调用），
+                            # 已产出内容照常落库，状态置 interrupted
+                            break
+            except TimeoutError:
+                budget_hit = f"运行超时（超过 {getattr(cfg, 'task_timeout', 300)}s）"
+                obs.inc("pathforge_runs_timeout_total", owner=owner or "default")
+
+            if budget_hit:
+                self._mark(run_id, status="interrupted", error=budget_hit, finished_at=time.time())
+                await self._finish(run_id, session, error=budget_hit, interrupted=True)
+                yield {"type": "error", "message": budget_hit}
+                yield {"type": "interrupted", "run_id": run_id, "reason": budget_hit}
+                return
 
             await self._finish(run_id, session, error="", interrupted=False)
         except asyncio.CancelledError:
             # 中断路径：本协程所属的消费端任务已被 cancel，此刻**不能再 yield**
             # （在取消展开过程中让生成器挂起，会把任务卡在"已取消但未结束"的状态）。
             # 因此把收尾落库交给一个游离任务，收尾完成后由 WebSocket 通道告知前端。
+            obs.inc("pathforge_runs_interrupted_total", owner=owner or "default")
             self._mark(run_id, status="interrupted", error="用户中断", finished_at=time.time())
             self._spawn_finish(run_id, session, "用户中断", True)
             raise
+        except QueueFullError as e:
+            # 队列在 acquire 时被占满（precheck 之后的竞态窗口）
+            obs.inc("pathforge_queue_rejected_total")
+            self._mark(run_id, status="failed", error=str(e), finished_at=time.time())
+            await self._finish(run_id, session, error=str(e), interrupted=False)
+            yield {"type": "error", "message": str(e)}
         except Exception as e:
+            obs.inc("pathforge_runs_failed_total", owner=owner or "default")
             await self._finish(run_id, session, error=f"{type(e).__name__}: {e}",
                                interrupted=False)
             yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
@@ -295,22 +366,30 @@ class RunService:
             if acquired:
                 self._admission.release(run_id)
             self._active_tasks.pop(run_id, None)
+            obs.gauge("pathforge_runs_active", self._admission.active_count)
+            obs.gauge("pathforge_queue_waiting", self._admission.waiting_count)
             with self._lock:
                 if self._session_owner.get(session_id) == run_id:
                     self._session_owner.pop(session_id, None)
 
     # ================= 内部：会话与 Agent =================
-    def _resolve_session(self, req: Any, workspace: str, preset_id: str) -> Session:
-        """取已存在的会话；不存在（或未指定）则新建一条并返回可运行的 Session 对象。"""
+    def _resolve_session(self, req: Any, workspace: str, preset_id: str,
+                         owner: Optional[str] = None) -> Session:
+        """取已存在的会话；不存在（或未指定）则新建一条并返回可运行的 Session 对象。
+
+        `owner` 非空时，只有属于该 owner 的会话能被续跑；别人的 session_id 会被
+        当作"不存在"从而新建一条——避免通过 ID 猜测读写他人会话。
+        """
         session_id = str(_pick(req, "session_id", "") or "").strip()
         session: Optional[Session] = None
         if session_id and self.sessions is not None:
-            session = self.sessions.load_runtime(session_id)
+            session = self.sessions.load_runtime(session_id, owner=owner)
         if session is None:
             if self.sessions is not None:
                 title = str(_pick(req, "task", "") or "").strip()[:30] or "新会话"
-                row = self.sessions.create(title=title, workspace=workspace, preset=preset_id)
-                session = self.sessions.load_runtime(row["id"])
+                row = self.sessions.create(title=title, workspace=workspace, preset=preset_id,
+                                           owner=owner or "default")
+                session = self.sessions.load_runtime(row["id"], owner=owner)
                 if session is None:
                     session = Session(id=row["id"], title=title)
             else:  # 没有会话服务时退化为"纯内存运行"，保证端点仍可用
@@ -359,7 +438,8 @@ class RunService:
 
     # ================= 内部：登记 / 观测 / 收尾 =================
     def _register_run(self, run_id: str, session: Session, task_text: str, preset_id: str,
-                      workspace: str, permission: str, model: str) -> None:
+                      workspace: str, permission: str, model: str,
+                      owner: Optional[str] = None) -> None:
         if self.sessions is None:
             return
         try:
@@ -367,7 +447,9 @@ class RunService:
             # 否则 /api/agent/runs/{id} 与收尾统计会落到一条无人认领的孤立记录上
             self.sessions.create_run(session.id, task=task_text, preset=preset_id,
                                      workspace=workspace, permission_mode=permission,
-                                     model=model, run_id=run_id)
+                                     model=model, run_id=run_id,
+                                     owner=owner or "default",
+                                     prompt_version=str(getattr(self.cfg, "prompt_version", "")))
         except Exception as e:
             print(f"[run_service] 运行登记失败（不阻断执行）: {type(e).__name__}: {e}")
 
@@ -382,8 +464,10 @@ class RunService:
         except Exception as e:
             print(f"[run_service] 起点快照写入失败（不影响执行）: {type(e).__name__}: {e}")
 
-    def _observe(self, run_id: str, session_id: str, event: dict) -> None:
+    def _observe(self, run_id: str, session_id: str, event: dict) -> str:
         """把事件同步到控制面状态，并把需要实时推送的类型转发到 WebSocket 通道。
+
+        返回非空字符串表示**触发了 token 预算**（调用方据此中止本次运行）。
 
         轨迹节点数与工具调用次数在这里**由事件流自行计数**：agent._finalize 产出的
         stats 里没有 `nodes` 字段，直接透传会让界面上的「本节点数」永远是 0。
@@ -395,8 +479,13 @@ class RunService:
                 if meta is not None:
                     meta["_nodes" if etype == "node_start" else "_tools"] = \
                         int(meta.get("_nodes" if etype == "node_start" else "_tools") or 0) + 1
+            if etype == "tool_call":
+                obs.inc("pathforge_tool_calls_total", tool=str(event.get("tool") or "unknown"))
         if etype == "metric":
             self._mark(run_id, stats={k: v for k, v in event.items() if k != "type"})
+            self._track_tokens(run_id, int(event.get("total_tokens") or 0))
+            obs.gauge("pathforge_context_ratio", float(event.get("context_ratio") or 0.0))
+            obs.gauge("pathforge_cache_hit_rate", float(event.get("cache_hit_rate") or 0.0))
         elif etype in ("run_done", "final_answer") and isinstance(event.get("stats"), dict):
             self._mark(run_id, stats=event["stats"])
         elif etype == "ask_user":
@@ -404,6 +493,25 @@ class RunService:
         if etype in ("tool_status", "tool_call", "tool_result", "tool_error", "metric",
                      "trajectory", "node_start", "node_end", "task_finish", "interrupted"):
             self._broadcast(session_id, event)
+        return self._budget_error(run_id)
+
+    def _track_tokens(self, run_id: str, total_tokens: int) -> None:
+        """按 metric 事件的**累计值**记录本 run 的 token 用量（取最大值，容忍乱序）。"""
+        with self._lock:
+            meta = self._runs.get(run_id)
+            if meta is not None:
+                meta["_tokens"] = max(int(meta.get("_tokens") or 0), int(total_tokens))
+                obs.gauge("pathforge_run_tokens", meta["_tokens"])
+
+    def _budget_error(self, run_id: str) -> str:
+        """token 预算判定：超限返回可读原因，否则空串。0 表示不限制。"""
+        limit = int(getattr(self.cfg, "max_tokens_per_run", 0) or 0)
+        if limit <= 0:
+            return ""
+        used = int((self._runs.get(run_id) or {}).get("_tokens") or 0)
+        if used > limit:
+            return f"超出 token 预算（已用 {used}，上限 {limit}）"
+        return ""
 
     def _broadcast_status(self, run_id: str, status: str, reason: str) -> None:
         meta = self._runs.get(run_id) or {}

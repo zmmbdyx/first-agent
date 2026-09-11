@@ -3,9 +3,10 @@
  * 所有请求走同源 `/api`（开发期由 Vite 代理到后端），无需在代码中硬编码后端地址。
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { authHeaders } from '@/lib/auth'
 import type {
-  FileContent, FileNode, GitChange, GitStatus, HealthInfo, ModelInfo, PresetInfo, Session,
-  ToolInfo, Workspace,
+  FeedbackBody, FeedbackItem, FileContent, FileNode, GitChange, GitStatus, HealthInfo, ModelInfo,
+  PresetInfo, Session, ToolInfo, Workspace,
 } from '@/types'
 
 const BASE = '/api'
@@ -17,13 +18,24 @@ export class ApiError extends Error {
     this.status = status
     this.name = 'ApiError'
   }
+
+  /**
+   * 凭据缺失/无效（契约 §2：无凭据 401、无效凭据 403）。
+   * 这里只做**标记**，不在本文件里跳转或弹窗——顶栏的连接状态与设置入口是 App 的职责，
+   * 数据层一旦做全局副作用，测试与非浏览器环境都会跟着遭殃。
+   */
+  get unauthorized(): boolean {
+    return this.status === 401 || this.status === 403
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: init?.body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
-    ...init,
-  })
+  // FormData 的 Content-Type（含 boundary）必须交给浏览器自己生成，因此不设置；
+  // 但 Authorization 头与 body 形态无关，任何请求都要带上。
+  const headers = init?.body instanceof FormData
+    ? authHeaders()
+    : { 'Content-Type': 'application/json', ...authHeaders() }
+  const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`
     try {
@@ -116,6 +128,14 @@ export const api = {
   },
   interrupt: (runId: string) =>
     request<{ ok: boolean }>(`/agent/runs/${runId}/interrupt`, { method: 'POST' }),
+
+  // ---- 反馈闭环（契约 HARDENING §4）----
+  submitFeedback: (sessionId: string, body: FeedbackBody) =>
+    request<{ ok: boolean; id: string }>(`/sessions/${sessionId}/feedback`, {
+      method: 'POST', body: json(body),
+    }),
+  sessionFeedback: (sessionId: string) =>
+    request<{ items: FeedbackItem[] }>(`/sessions/${sessionId}/feedback`),
 }
 
 export interface SessionHistory {
@@ -137,6 +157,7 @@ const KEY = {
   presets: ['presets'] as const,
   git: (ws: string) => ['git', ws] as const,
   tree: (ws: string, path: string) => ['tree', ws, path] as const,
+  feedback: (id: string) => ['session-feedback', id] as const,
 }
 
 export const useSessions = (workspace?: string) =>
@@ -230,6 +251,27 @@ export function useUnregisterTool() {
   return useMutation({
     mutationFn: api.unregisterTool,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tools'] }),
+  })
+}
+
+/** 会话反馈列表：已评过的消息据此回填星级（契约 §7） */
+export const useSessionFeedback = (sessionId: string) =>
+  useQuery({
+    queryKey: KEY.feedback(sessionId),
+    queryFn: () => api.sessionFeedback(sessionId),
+    enabled: Boolean(sessionId),
+    staleTime: 30_000,
+    // 反馈是锦上添花：404（后端未部署该端点）或 401/403（令牌无效）都不该反复重试刷屏，
+    // 星级按钮本身不依赖这个查询，失败时照常可点。
+    retry: false,
+  })
+
+/** 提交反馈：成功后失效该会话的反馈查询，让星星立刻反映最新状态 */
+export function useSubmitFeedback(sessionId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: FeedbackBody) => api.submitFeedback(sessionId, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY.feedback(sessionId) }),
   })
 }
 

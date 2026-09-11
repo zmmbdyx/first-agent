@@ -13,6 +13,8 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=gen_id)
+    # 归属者：多租户隔离的维度。默认 default，未开启认证时全部落在 default
+    owner: Mapped[str] = mapped_column(String(64), default="default", index=True)
     title: Mapped[str] = mapped_column(String(200), default="新会话")
     # 运行态：idle / running / awaiting_input / done，与 core.memory.Session 保持一致
     status: Mapped[str] = mapped_column(String(32), default="idle")

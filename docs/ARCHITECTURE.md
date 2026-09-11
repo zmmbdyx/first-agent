@@ -1,5 +1,27 @@
 # 拓径 PATHFORGE — 架构契约（冻结版）
 
+> ## ⚠️ 本轮加固增量（优先于下方正文，详见 `docs/HARDENING.md`）
+>
+> 1. **鉴权**：新增全局中间件（fail-closed）。`AUTH_ENABLED=true` 时 `/api/*`、`/metrics` 需凭据；
+>    `/api/health` 公开。凭据来源：`Authorization: Bearer <token>` 或 `X-API-Key: <token>`；
+>    **只读 GET 额外接受 `?token=`**（供 `<img src>`/直链预览），WebSocket 用 `?token=`。
+>    失败：401（未带凭据）/ 403（凭据无效）。
+> 2. **owner（多租户）**：`sessions.owner`、`runs.owner`、`feedback.owner` 三处新增；
+>    会话域读操作把"非本 owner"视为**不存在**（404）。`owner` 由令牌映射（`API_KEYS=token=owner`）决定。
+> 3. **新增端点**：
+>    - `POST /api/sessions/{id}/feedback` → `{ok, id, session_id, run_id, rating, comment, message_ts, created_at}`
+>    - `GET /api/sessions/{id}/feedback` → `{items:[...], summary:{count, average, distribution}}`
+>    - `GET /metrics` → Prometheus 文本格式
+> 4. **运行预算/超时**：`MAX_TOKENS_PER_RUN` 超限或 `TASK_TIMEOUT` 超时 → 事件序列
+>    `error` → `interrupted`（reason 说明原因），run 归档为 `interrupted`；**`TASK_TIMEOUT` 语义
+>    由"沙箱单命令超时"修正为"单次运行墙钟超时"**（沙箱改用 `SANDBOX_TIMEOUT`）。
+> 5. **队列上限**：`MAX_QUEUE_SIZE` 满时 `POST /api/agent/run` 在建流前返回 `429` + `Retry-After`。
+> 6. **不可信内容边界**：所有外部文本必须经 `core/prompts.py::wrap_untrusted(text, source)`
+>    包裹为 `<user_data source="…" trust="untrusted">…</user_data>` 后方可进入 LLM 调用。
+> 7. **新增 run 字段**：`owner`、`prompt_version`；**新增表** `feedback`。
+>
+> ---
+
 > 本文件是前后端并行开发的**唯一接口基线**。任何实现都必须严格遵循此处的字段名、事件名、路径与方法签名；如需变更，先改本文件。
 
 - 项目名：**拓径 / PATHFORGE**

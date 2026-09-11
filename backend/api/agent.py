@@ -12,11 +12,13 @@ import threading
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from schemas.agent import InterruptOut, PresetListOut, RunRequest, RunStatusOut
+from security import current_owner
 from services import get_session_service
+from services.run_service import QueueFullError, RunServiceError
 
 router = APIRouter(tags=["agent"], prefix="/agent")
 
@@ -81,13 +83,17 @@ def sse_headers() -> Dict[str, str]:
             "Connection": "keep-alive"}
 
 
-async def sse_stream(service: Any, req: RunRequest, heartbeat: float = 15.0) -> AsyncIterator[str]:
+async def sse_stream(service: Any, req: RunRequest, heartbeat: float = 15.0,
+                     owner: str = "default") -> AsyncIterator[str]:
     """把 RunService 的事件流包装成 SSE；15s 无事件即发 heartbeat 保活。
 
     心跳与业务事件并发等待，任一先到即产出——这样长耗时工具调用也不会让
     浏览器/反向代理误判连接已死。同时兼容 `stream()` 返回同步/异步迭代器两种实现。
     """
-    events = service.stream(req)
+    try:
+        events = service.stream(req, owner=owner)
+    except TypeError:                  # 兼容尚未支持 owner 参数的实现
+        events = service.stream(req)
     if hasattr(events, "__await__"):
         events = await events
     iterator = events.__aiter__() if hasattr(events, "__aiter__") else _thread_iter(events)
@@ -246,14 +252,25 @@ class EventRecorder:
 
 
 @router.post("/run")
-async def run_agent(req: RunRequest):
-    """`POST /api/agent/run` → text/event-stream（契约 2.1 / 2.2）。"""
+async def run_agent(req: RunRequest, owner: str = Depends(current_owner)):
+    """`POST /api/agent/run` → text/event-stream（契约 2.1 / 2.2）。
+
+    队列满时必须在**建立 SSE 之前**返回 429：流一旦开始输出就无法再改状态码，
+    否则前端只会看到一条"错误事件"而不是可重试的限流信号。
+    """
     service, err = resolve_run_service()
     if service is None:
         raise HTTPException(status_code=503, detail=RUN_SERVICE_HINT.format(err=err or "未知原因"))
     try:
-        return StreamingResponse(sse_stream(service, req), media_type="text/event-stream",
-                                 headers=sse_headers())
+        service.precheck(req)          # 队列容量 / 空任务等快速失败检查
+    except QueueFullError as e:
+        raise HTTPException(status_code=429, detail=str(e),
+                            headers={"Retry-After": "5"})
+    except RunServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        return StreamingResponse(sse_stream(service, req, owner=owner),
+                                 media_type="text/event-stream", headers=sse_headers())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SSE 流初始化失败: {type(e).__name__}: {e}")
 

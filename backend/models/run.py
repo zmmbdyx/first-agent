@@ -14,6 +14,9 @@ class Run(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=gen_id)
     session_id: Mapped[str] = mapped_column(String(32), index=True, default="")
+    # 归属者与提示词版本：前者用于租户隔离，后者用于质量回归归因（见 HARDENING 第 3 节）
+    owner: Mapped[str] = mapped_column(String(64), default="default", index=True)
+    prompt_version: Mapped[str] = mapped_column(String(32), default="")
     task: Mapped[str] = mapped_column(Text, default="")
     preset: Mapped[str] = mapped_column(String(32), default="standard")
     workspace: Mapped[str] = mapped_column(String(120), default="default")

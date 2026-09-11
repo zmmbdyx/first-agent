@@ -12,6 +12,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from security import authorize_websocket
 from services.broadcast import broadcaster, bind_loop
 
 router = APIRouter(tags=["ws"])
@@ -33,6 +34,23 @@ async def _send_loop(websocket: WebSocket, queue: asyncio.Queue) -> None:
 
 @router.websocket("/ws/agent/{session_id}")
 async def agent_ws(websocket: WebSocket, session_id: str) -> None:
+    # 鉴权必须发生在 accept 之前：先 accept 再关闭会先建立连接、白名单一次握手开销，
+    # 且前端拿不到明确的失败原因。令牌由 `?token=` 传入（浏览器 WS 不能自定义请求头）。
+    owner = authorize_websocket(websocket)
+    if owner is None:
+        await websocket.close(code=4401)   # 4401：自定义"未授权"码，前端据此提示
+        return
+    # 会话归属校验：别人的 session_id 不允许订阅（否则会收到他人运行的实时事件）
+    try:
+        from services import get_session_service
+        row = get_session_service().get(session_id, owner=owner)
+        if row is None and session_id not in ("", "adhoc"):
+            await websocket.close(code=4403)
+            return
+    except Exception:  # noqa: BLE001 — 校验失败按拒绝处理（fail-closed）
+        await websocket.close(code=4403)
+        return
+
     await websocket.accept()
     bind_loop()
     queue = broadcaster.subscribe(session_id)

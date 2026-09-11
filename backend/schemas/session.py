@@ -85,3 +85,27 @@ class RollbackOut(BaseModel):
     session_id: str = ""
     checkpoint_id: str = ""
     detail: Optional[str] = None
+
+
+class FeedbackIn(BaseModel):
+    """用户反馈（评审 P1-4）：1-5 星 + 可选备注，可关联到具体 run 与消息时间戳。"""
+
+    rating: int = Field(0, ge=0, le=5)
+    comment: str = Field("", max_length=2000)
+    run_id: str = Field("", max_length=32)
+    message_ts: float = 0.0
+
+
+class FeedbackOut(ORMModel):
+    id: str
+    session_id: str
+    run_id: str = ""
+    rating: int = 0
+    comment: str = ""
+    message_ts: float = 0.0
+    created_at: str = ""
+
+
+class FeedbackListOut(BaseModel):
+    items: List[FeedbackOut] = Field(default_factory=list)
+    summary: Dict[str, Any] = Field(default_factory=dict)

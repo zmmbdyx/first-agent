@@ -45,7 +45,7 @@ _ENV_FILES = (BACKEND_DIR / ".env", PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.
 _NUM_DEFAULTS = {
     "max_react_steps": 5, "llm_max_retries": 3, "tool_max_retries": 2, "max_tasks": 6,
     "task_timeout": 300, "sandbox_timeout": 300, "sandbox_max_output": 65536, "api_port": 8000,
-    "max_concurrent_runs": 2,
+    "max_concurrent_runs": 2, "max_queue_size": 32, "context_window": 65536,
 }
 
 
@@ -85,9 +85,25 @@ class Settings(BaseSettings):
     llm_max_retries: int = 3              # LLM_MAX_RETRIES
     tool_max_retries: int = 2             # TOOL_MAX_RETRIES
     max_tasks: int = 6                    # MAX_TASKS
-    task_timeout: int = 300               # TASK_TIMEOUT
+    task_timeout: int = 300               # TASK_TIMEOUT：**单次运行的墙钟超时**（见 HARDENING 第 1 节）
     privacy_mode: bool = False
     search_api_key: str = ""              # SEARCH_API_KEY（可选联网检索增强）
+
+    # ---------------- 认证与多租户 ----------------
+    # 默认关闭以保证本地开箱即跑；一旦对公网或多用户暴露必须开启
+    auth_enabled: bool = False
+    api_keys: str = ""                    # API_KEYS：token1=alice,token2=bob（owner 缺省 default）
+    auth_token: str = ""                  # AUTH_TOKEN：单令牌快捷方式（owner 固定 default）
+    auth_header: str = "Authorization"    # 也可用 X-API-Key，两种都接受
+
+    # ---------------- 运行预算 ----------------
+    max_tokens_per_run: int = 0           # MAX_TOKENS_PER_RUN：0=不限；超限中止本次运行
+    max_queue_size: int = 32              # MAX_QUEUE_SIZE：准入队列上限，超出 429
+
+    # ---------------- 可观测 / 版本 ----------------
+    context_window: int = 65536           # CONTEXT_WINDOW：真实模型窗口（修正此前恒为默认值）
+    prompt_version: str = "v1"            # PROMPT_VERSION：随 run 落库，便于回归归因
+    log_json: bool = False                # LOG_JSON：结构化日志（便于采集）
 
     # ---------------- 数据库 ----------------
     database_url: str = ""
@@ -223,6 +239,36 @@ class Settings(BaseSettings):
             return True
         return self.app_env.strip().lower() not in ("production", "prod")
 
+    # ---------------- 认证与多租户 ----------------
+    @property
+    def key_map(self) -> dict[str, str]:
+        """令牌 → owner 映射。
+
+        支持 `API_KEYS=token1=alice,token2=bob`（推荐，可多用户）；
+        未配置时回落到单令牌 `AUTH_TOKEN`，owner 固定为 default。
+        """
+        mapping: dict[str, str] = {}
+        for item in (self.api_keys or "").split(","):
+            item = item.strip()
+            if not item:
+                continue
+            token, _, owner = item.partition("=")
+            token = token.strip()
+            if token:
+                mapping[token] = (owner.strip() or "default")
+        if not mapping and self.auth_token.strip():
+            mapping[self.auth_token.strip()] = "default"
+        return mapping
+
+    @property
+    def auth_required(self) -> bool:
+        """是否需要鉴权。开着开关却没配任何令牌属于配置错误，此时**拒绝启动式放行**更危险，
+        因此按"需要鉴权"处理（所有请求都会被拒），并在启动日志里明确告警。"""
+        return bool(self.auth_enabled)
+
+    @property
+    def auth_misconfigured(self) -> bool:
+        return self.auth_enabled and not self.key_map
     @property
     def llm_ready(self) -> bool:
         return self.provider != "mock"

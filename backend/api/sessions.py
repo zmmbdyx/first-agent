@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session as OrmSession
 
 from db import get_db
-from schemas.session import (CheckpointIn, HistoryOut, RollbackOut, SessionCreate,
-                             SessionListOut, SessionOut, SessionPin, SessionRename)
+from schemas.session import (CheckpointIn, FeedbackIn, FeedbackListOut, HistoryOut,
+                             RollbackOut, SessionCreate, SessionListOut, SessionOut,
+                             SessionPin, SessionRename)
+from security import current_owner
 from services import get_session_service
 from services.workspace_service import WorkspaceError
 
@@ -16,31 +18,35 @@ router = APIRouter(tags=["sessions"])
 @router.get("/sessions", response_model=SessionListOut)
 def list_sessions(workspace: str = "", limit: int = Query(50, ge=1, le=500),
                   offset: int = Query(0, ge=0), q: str = "",
-                  db: OrmSession = Depends(get_db)) -> dict:
+                  db: OrmSession = Depends(get_db),
+                  owner: str = Depends(current_owner)) -> dict:
     items, total = get_session_service().list(workspace=workspace or None, limit=limit,
-                                              offset=offset, q=q or None, db=db)
+                                              offset=offset, q=q or None, db=db, owner=owner)
     return {"items": items, "total": total}
 
 
 @router.post("/sessions", response_model=SessionOut, status_code=201)
-def create_session(payload: SessionCreate, db: OrmSession = Depends(get_db)) -> dict:
+def create_session(payload: SessionCreate, db: OrmSession = Depends(get_db),
+                   owner: str = Depends(current_owner)) -> dict:
     return get_session_service().create(title=payload.title, workspace=payload.workspace,
-                                        preset=payload.preset, db=db,
+                                        preset=payload.preset, db=db, owner=owner,
                                         permission_mode=payload.permission_mode,
                                         model=payload.model)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionOut)
-def get_session(session_id: str, db: OrmSession = Depends(get_db)) -> dict:
-    data = get_session_service().get(session_id, db=db)
+def get_session(session_id: str, db: OrmSession = Depends(get_db),
+                owner: str = Depends(current_owner)) -> dict:
+    data = get_session_service().get(session_id, db=db, owner=owner)
     if data is None:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
     return data
 
 
 @router.get("/sessions/{session_id}/history", response_model=HistoryOut)
-def session_history(session_id: str, db: OrmSession = Depends(get_db)) -> dict:
-    data = get_session_service().history(session_id, db=db)
+def session_history(session_id: str, db: OrmSession = Depends(get_db),
+                    owner: str = Depends(current_owner)) -> dict:
+    data = get_session_service().history(session_id, db=db, owner=owner)
     if data is None:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
     return data
@@ -48,26 +54,51 @@ def session_history(session_id: str, db: OrmSession = Depends(get_db)) -> dict:
 
 @router.put("/sessions/{session_id}/title", response_model=SessionOut)
 def rename_session(session_id: str, payload: SessionRename,
-                   db: OrmSession = Depends(get_db)) -> dict:
-    data = get_session_service().rename(session_id, payload.title, db=db)
+                   db: OrmSession = Depends(get_db),
+                   owner: str = Depends(current_owner)) -> dict:
+    data = get_session_service().rename(session_id, payload.title, db=db, owner=owner)
     if data is None:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
     return data
 
 
 @router.put("/sessions/{session_id}/pin", response_model=SessionOut)
-def pin_session(session_id: str, payload: SessionPin, db: OrmSession = Depends(get_db)) -> dict:
-    data = get_session_service().set_pinned(session_id, payload.pinned, db=db)
+def pin_session(session_id: str, payload: SessionPin, db: OrmSession = Depends(get_db),
+                owner: str = Depends(current_owner)) -> dict:
+    data = get_session_service().set_pinned(session_id, payload.pinned, db=db, owner=owner)
     if data is None:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
     return data
 
 
 @router.delete("/sessions/{session_id}")
-def delete_session(session_id: str, db: OrmSession = Depends(get_db)) -> dict:
-    if not get_session_service().delete(session_id, db=db):
+def delete_session(session_id: str, db: OrmSession = Depends(get_db),
+                   owner: str = Depends(current_owner)) -> dict:
+    if not get_session_service().delete(session_id, db=db, owner=owner):
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
     return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/feedback", status_code=201)
+def add_feedback(session_id: str, payload: FeedbackIn, db: OrmSession = Depends(get_db),
+                 owner: str = Depends(current_owner)) -> dict:
+    """记录用户对某条回复的评分（评审 P1-4 反馈闭环）。"""
+    item = get_session_service().add_feedback(
+        session_id, rating=payload.rating, comment=payload.comment, run_id=payload.run_id,
+        message_ts=payload.message_ts, db=db, owner=owner)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    return {"ok": True, **item}
+
+
+@router.get("/sessions/{session_id}/feedback", response_model=FeedbackListOut)
+def list_feedback(session_id: str, db: OrmSession = Depends(get_db),
+                  owner: str = Depends(current_owner)) -> dict:
+    service = get_session_service()
+    items = service.list_feedback(session_id, db=db, owner=owner)
+    if not items and service.get(session_id, db=db, owner=owner) is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    return {"items": items, "summary": service.feedback_summary(db=db)}
 
 
 @router.post("/sessions/{session_id}/rollback", response_model=RollbackOut)

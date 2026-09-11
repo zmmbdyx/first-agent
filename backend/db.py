@@ -123,15 +123,70 @@ def describe() -> dict:
 
 
 def init_db() -> None:
-    """建表（幂等）。任何失败都不抛出——服务必须能起来，由 /api/health 暴露异常。"""
+    """建表（幂等）+ 补列（升级路径）。任何失败都不抛出——服务必须能起来，
+    由 /api/health 暴露异常。"""
     global _init_done
     try:
         from models import Base as _AllModels  # noqa: F401  确保全部模型已 import 注册
         engine = get_engine()
         _AllModels.metadata.create_all(bind=engine)
+        added = ensure_columns()
+        if added:
+            print(f"[db] 已完成列升级: {', '.join(added)}")
         _init_done = True
     except Exception as e:
         print(f"[db] 建表失败（{type(e).__name__}: {e}），相关端点将返回明确错误")
+
+
+# create_all 只建新表，**不会**给已存在的表补列；不显式 ALTER 的话，
+# 老库升级后会立刻报 "no such column: sessions.owner"。
+_COLUMN_UPGRADES = (
+    ("sessions", "owner", "VARCHAR(64) DEFAULT 'default'"),
+    ("runs", "owner", "VARCHAR(64) DEFAULT 'default'"),
+    ("runs", "prompt_version", "VARCHAR(32) DEFAULT ''"),
+)
+_INDEX_UPGRADES = (
+    ("ix_sessions_owner", "sessions", "owner"),
+    ("ix_runs_owner", "runs", "owner"),
+)
+
+
+def ensure_columns() -> list[str]:
+    """为已存在的库补齐新增列与索引（SQLite / PostgreSQL 通用）。返回实际执行的项。"""
+    from sqlalchemy import inspect
+
+    engine = get_engine()
+    applied: list[str] = []
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+    except Exception as e:  # noqa: BLE001 — 探测失败不阻断启动
+        print(f"[db] 列升级探测失败（{type(e).__name__}: {e}）")
+        return applied
+
+    with engine.begin() as conn:
+        for table, column, ddl in _COLUMN_UPGRADES:
+            if table not in tables:
+                continue
+            try:
+                existing = {c["name"] for c in inspector.get_columns(table)}
+            except Exception:  # noqa: BLE001
+                continue
+            if column in existing:
+                continue
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                applied.append(f"{table}.{column}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[db] 补列失败 {table}.{column}: {type(e).__name__}: {e}")
+        for index, table, column in _INDEX_UPGRADES:
+            if table not in tables:
+                continue
+            try:
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index} ON {table} ({column})"))
+            except Exception as e:  # noqa: BLE001 — 索引缺失只影响性能
+                print(f"[db] 建索引失败 {index}: {type(e).__name__}: {e}")
+    return applied
 
 
 def initialized() -> bool:

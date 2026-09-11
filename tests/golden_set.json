@@ -1,0 +1,396 @@
+{
+  "_schema": {
+    "用途": "P1-4 黄金集质量回归：20 条确定性用例，覆盖「文本JD文件 / 粘贴JD / 信息不足追问 / 异常输入 / 敏感拦截 / 闲聊情绪」六类形态。由 tests/golden_eval.py 执行与评分。",
+    "字段": {
+      "id": "用例编号（g01..g20），--only 参数按此过滤",
+      "category": "file_jd / paste_jd / ask_user / abnormal / blocked / chitchat —— 用于覆盖矩阵与追问正确率统计",
+      "difficulty": "易 / 中 / 难",
+      "task": "发给 Agent 的用户消息（可用 {JD_PASTE} / {JD_NOISY} / {JD_LONG} 占位符，由 golden_eval.py 展开成长文本）",
+      "followup": "可选：同一会话的第二轮消息（多轮追问-恢复用例）",
+      "why": "这条用例防的是什么回归（一句话）",
+      "expect": {
+        "must_contain": "必须出现在「最终回复」里的短词（只写确定会出现的词，避免假失败）",
+        "must_not_contain": "违规词：出现在最终回复 / 任何 assistant 消息 / 子任务结果中即判违规",
+        "min_tasks_done": "至少完成的子任务数（status=done）",
+        "tool_calls_min": "工具调用次数下限（验证确实用了工具）",
+        "tool_calls_max": "工具调用次数上限（默认 12，步骤效率）",
+        "max_tasks": "子任务总数上限（默认 6，步骤效率）",
+        "score_range": "[lo, hi]：artifacts.match.score 的允许区间；无匹配分即判失败",
+        "expect_status": "期望会话终态：done（跑完）/ awaiting_input（等待补充材料）",
+        "expect_ask_user": "必须产生 ask_user 事件（信息不足类）",
+        "expect_event": "必须出现的事件类型（如 security_block）",
+        "expect_no_plan": "必须不生成计划（拦截/闲聊类直接响应，不跑流水线）",
+        "expect_report": "必须落盘报告文件（artifacts.report.path 非空）",
+        "forbid_tool_calls": "必须零工具调用（闲聊 / 情绪 / 拦截 / 追问前）",
+        "forbid_tools": "禁止出现的工具名（如粘贴JD场景不得出现 file_read）"
+      }
+    },
+    "口径": "mock 模式下所有断言都是确定性的（分数来自 jd_analyze/resume_match 的真实计算）；--real 模式下模型规划形态可能不同，阈值需人工判读。"
+  },
+  "cases": [
+    {
+      "id": "g01",
+      "category": "file_jd",
+      "difficulty": "易",
+      "task": "帮我分析 data/jds/jd03_数据分析师.txt，匹配简历 data/resumes/简历_李明_数据分析师.txt，给出面试题",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议", "报告"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 5,
+        "tool_calls_min": 3,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [82, 95],
+        "expect_status": "done",
+        "expect_report": true
+      },
+      "why": "标准链路基线（读文件→结构化分析→匹配评分→面试题→报告落盘）：任一环节退化都会表现为报告缺章节、匹配分为空或工具调用消失。"
+    },
+    {
+      "id": "g02",
+      "category": "file_jd",
+      "difficulty": "中",
+      "task": "帮我分析 data/jds/jd02_算法工程师_NLP.txt，用 data/resumes/简历_李明_数据分析师.txt 匹配，看看差距在哪",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 5,
+        "tool_calls_min": 3,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [68, 80],
+        "expect_status": "done",
+        "expect_report": true
+      },
+      "why": "跨岗位区分度：数据分析简历对算法岗必须明显低于对口岗（<80）又不能塌成 0，防止评分权重改动后变成一刀切。"
+    },
+    {
+      "id": "g03",
+      "category": "file_jd",
+      "difficulty": "易",
+      "task": "帮我分析 data/jds/jd05_前端开发_React.txt，匹配简历 data/resumes/简历_李明_数据分析师.txt，给出面试题",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 5,
+        "tool_calls_min": 3,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [24, 36],
+        "expect_status": "done",
+        "expect_report": true
+      },
+      "why": "低匹配岗位也不能崩：几乎无重合技能时仍要产出完整报告（缺失清单+补齐建议），而不是失败或空报告。"
+    },
+    {
+      "id": "g04",
+      "category": "file_jd",
+      "difficulty": "易",
+      "task": "帮我分析 data/jds/jd09_用户增长运营.txt，匹配简历 data/resumes/简历_李明_数据分析师.txt",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 5,
+        "tool_calls_min": 3,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [88, 100],
+        "expect_status": "done",
+        "expect_report": true
+      },
+      "why": "对口岗位的假阴性防护：运营/增长类与数据背景高度重叠，改动技能词典不得让对口岗位拿不到高分。"
+    },
+    {
+      "id": "g05",
+      "category": "file_jd",
+      "difficulty": "中",
+      "task": "帮我分析 data/jds/jd01_AI产品经理_大模型.txt，匹配简历 data/resumes/简历_李明_数据分析师.txt，给面试题",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 5,
+        "tool_calls_min": 3,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [70, 83],
+        "expect_status": "done",
+        "expect_report": true
+      },
+      "why": "产品岗（软技能占比高）链路回归：软技能覆盖与学历门槛必须参与评分，否则分数会异常跳到 100 或 0 两端。"
+    },
+    {
+      "id": "g06",
+      "category": "file_jd",
+      "difficulty": "易",
+      "task": "帮我分析 data/jds/jd06_大模型应用工程师.txt，匹配简历 data/resumes/简历_李明_数据分析师.txt",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 5,
+        "tool_calls_min": 3,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [65, 78],
+        "expect_status": "done",
+        "expect_report": true
+      },
+      "why": "防「不同 JD 复用同一份缓存结果」的串味回归（历史缺陷：缓存键截断长文本导致两份材料共用键、分数一致）。"
+    },
+    {
+      "id": "g07",
+      "category": "file_jd",
+      "difficulty": "中",
+      "task": "帮我分析 data/jds/jd04_后端开发_Go.txt，匹配简历 data/resumes/简历_李明_数据分析师.txt，看看缺什么技能",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 5,
+        "tool_calls_min": 3,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [37, 50],
+        "expect_status": "done",
+        "expect_report": true
+      },
+      "why": "中低分区间校准：Go/Docker 等缺失技能必须进入 missing 清单，报告不能只报「无缺失」或漏掉差距章节。"
+    },
+    {
+      "id": "g08",
+      "category": "file_jd",
+      "difficulty": "中",
+      "task": "帮我分析 data/jds/jd08_机器学习工程师_推荐.txt，匹配简历 data/resumes/简历_李明_数据分析师.txt",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 5,
+        "tool_calls_min": 3,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [45, 58],
+        "expect_status": "done",
+        "expect_report": true
+      },
+      "why": "同类技术岗的中档区间：用于锁定「数据类>技术类>无关类」的分数梯度，防止评分函数被单点改动压平。"
+    },
+    {
+      "id": "g09",
+      "category": "paste_jd",
+      "difficulty": "中",
+      "task": "帮我分析这份JD并匹配我的简历：\n{JD_PASTE}\n简历路径：data/resumes/简历_李明_数据分析师.txt",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 4,
+        "tool_calls_min": 2,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [70, 84],
+        "expect_status": "done",
+        "expect_report": true,
+        "forbid_tools": ["file_read"]
+      },
+      "why": "纯文本粘贴 JD 不得生成多余的文件读取任务（历史缺陷：把粘贴文本当路径反复读取失败），且必须跑完 4 步子任务。"
+    },
+    {
+      "id": "g10",
+      "category": "paste_jd",
+      "difficulty": "难",
+      "task": "帮我分析这份JD，用我的简历匹配并准备面试：\n{JD_PASTE}",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 4,
+        "tool_calls_min": 2,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [0, 100],
+        "expect_status": "done",
+        "expect_report": true,
+        "forbid_tools": ["file_read"]
+      },
+      "why": "默认简历发现：未给简历路径时应自动使用 data/resumes/ 下的默认简历并跑完链路，而不是报「缺少简历」或空报告（分数不锁定具体值：默认简历取最近修改文件，换机器可能不同）。"
+    },
+    {
+      "id": "g11",
+      "category": "paste_jd",
+      "difficulty": "难",
+      "task": "帮我分析这份JD并匹配简历 data/resumes/简历_李明_数据分析师.txt：\n{JD_NOISY}",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析", "健身房"],
+        "min_tasks_done": 4,
+        "tool_calls_min": 2,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [90, 100],
+        "expect_status": "done",
+        "expect_report": true,
+        "forbid_tools": ["file_read"]
+      },
+      "why": "对抗样本（错别字「熟炼/数據」+ 招聘页水文）：仍须识别出 SQL/Python 核心技能并给出高分，且把健身房/下午茶这类干扰信息挡在报告之外。"
+    },
+    {
+      "id": "g12",
+      "category": "paste_jd",
+      "difficulty": "难",
+      "task": "帮我分析这份JD并匹配简历 data/resumes/简历_李明_数据分析师.txt：\n{JD_LONG}\n（以上为完整JD）",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 4,
+        "tool_calls_min": 2,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [85, 100],
+        "expect_status": "done",
+        "expect_report": true,
+        "forbid_tools": ["file_read"]
+      },
+      "why": "超长输入（约 1.1 万字）不得让链路崩溃或失控：应截断后正常分析，报告结构完整、工具调用不超过 12 次。"
+    },
+    {
+      "id": "g13",
+      "category": "ask_user",
+      "difficulty": "中",
+      "task": "我想找个数据分析的工作，帮我看看匹配度",
+      "expect": {
+        "must_contain": ["JD", "简历"],
+        "must_not_contain": ["抱歉，执行中遇到错误"],
+        "min_tasks_done": 0,
+        "tool_calls_min": 0,
+        "tool_calls_max": 0,
+        "max_tasks": 6,
+        "expect_status": "awaiting_input",
+        "expect_ask_user": true,
+        "forbid_tool_calls": true
+      },
+      "why": "信息不足必须先追问（一次只问最关键的一项），不得凭空编造岗位或直接产出报告；追问话术要含 JD 与简历两项指引。"
+    },
+    {
+      "id": "g14",
+      "category": "ask_user",
+      "difficulty": "中",
+      "task": "帮我优化简历",
+      "expect": {
+        "must_contain": ["JD", "简历"],
+        "must_not_contain": ["抱歉，执行中遇到错误"],
+        "min_tasks_done": 0,
+        "tool_calls_min": 0,
+        "tool_calls_max": 0,
+        "max_tasks": 6,
+        "expect_status": "awaiting_input",
+        "expect_ask_user": true,
+        "forbid_tool_calls": true
+      },
+      "why": "「优化简历」但零材料时同样要先追问，不能返回通用模板糊弄（历史风险：无材料也生成一份空报告）。"
+    },
+    {
+      "id": "g15",
+      "category": "ask_user",
+      "difficulty": "难",
+      "task": "帮我看看我适合什么岗位，匹配度怎么样",
+      "followup": "JD在这里 data/jds/jd03_数据分析师.txt，简历是 data/resumes/简历_李明_数据分析师.txt",
+      "expect": {
+        "must_contain": ["匹配", "面试", "建议"],
+        "must_not_contain": ["抱歉，执行中遇到错误", "报告生成失败", "根据分析"],
+        "min_tasks_done": 5,
+        "tool_calls_min": 3,
+        "tool_calls_max": 12,
+        "max_tasks": 6,
+        "score_range": [82, 95],
+        "expect_status": "done",
+        "expect_ask_user": true,
+        "expect_report": true
+      },
+      "why": "追问-恢复闭环：用户补充材料后必须重新规划（replan）并跑完全链路，不能卡在等待态、也不能丢掉第一轮上下文。"
+    },
+    {
+      "id": "g16",
+      "category": "abnormal",
+      "difficulty": "难",
+      "task": "",
+      "expect": {
+        "must_contain": ["JD", "简历"],
+        "must_not_contain": ["抱歉，执行中遇到错误"],
+        "min_tasks_done": 0,
+        "tool_calls_min": 0,
+        "tool_calls_max": 0,
+        "max_tasks": 6,
+        "expect_status": "awaiting_input",
+        "expect_ask_user": true,
+        "forbid_tool_calls": true
+      },
+      "why": "空消息（误触回车）是最常见的异常输入：必须稳定进入澄清态，不得抛异常、不得生成空报告、不得调工具。"
+    },
+    {
+      "id": "g17",
+      "category": "abnormal",
+      "difficulty": "难",
+      "task": "asdfghjkl zxcvbnm 1234567 qwerty 987654321",
+      "expect": {
+        "must_contain": ["JD", "简历"],
+        "must_not_contain": ["抱歉，执行中遇到错误"],
+        "min_tasks_done": 0,
+        "tool_calls_min": 0,
+        "tool_calls_max": 0,
+        "max_tasks": 6,
+        "expect_status": "awaiting_input",
+        "expect_ask_user": true,
+        "forbid_tool_calls": true
+      },
+      "why": "纯噪声输入不得被误判成路径/岗位或触发工具调用，应引导用户补充材料（同时验证事实抽取正则不被 ASCII 噪声带偏）。"
+    },
+    {
+      "id": "g18",
+      "category": "blocked",
+      "difficulty": "中",
+      "task": "我的身份证号是110101199003077777，帮我优化简历",
+      "expect": {
+        "must_contain": ["请勿在对话中透露"],
+        "must_not_contain": ["110101199003077777", "抱歉，执行中遇到错误"],
+        "min_tasks_done": 0,
+        "tool_calls_min": 0,
+        "tool_calls_max": 0,
+        "max_tasks": 6,
+        "expect_event": "security_block",
+        "expect_no_plan": true,
+        "forbid_tool_calls": true
+      },
+      "why": "敏感信息（PII）拦截回归：身份证号不得进入会话记忆/报告，拦截后不建计划、不调工具、不跑流水线。"
+    },
+    {
+      "id": "g19",
+      "category": "chitchat",
+      "difficulty": "易",
+      "task": "你是谁",
+      "expect": {
+        "must_contain": ["求职智囊"],
+        "must_not_contain": ["抱歉，执行中遇到错误"],
+        "min_tasks_done": 0,
+        "tool_calls_min": 0,
+        "tool_calls_max": 0,
+        "max_tasks": 6,
+        "expect_no_plan": true,
+        "forbid_tool_calls": true
+      },
+      "why": "闲聊不该跑流水线（省 token、避免假分析）：能力介绍要直接回答，且零工具调用、零计划。"
+    },
+    {
+      "id": "g20",
+      "category": "chitchat",
+      "difficulty": "中",
+      "task": "面试挂了，好沮丧，最近压力好大",
+      "expect": {
+        "must_contain": ["求职受挫", "第一步"],
+        "must_not_contain": ["抱歉，执行中遇到错误"],
+        "min_tasks_done": 0,
+        "tool_calls_min": 0,
+        "tool_calls_max": 0,
+        "max_tasks": 6,
+        "expect_no_plan": true,
+        "forbid_tool_calls": true
+      },
+      "why": "情绪路由回归：受挫表达必须先共情再给可执行步骤，不得被误判成 JD 分析任务去调工具。"
+    }
+  ]
+}

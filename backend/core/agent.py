@@ -14,7 +14,7 @@ from core.memory import Memory, Session, Task
 from core.schemas import validate_react_decision
 from core.prompts import (PERSONA_RULES, REACT_SYSTEM, SYNTHESIZE_SYSTEM,
                           FACT_EXTRACT_SYSTEM, ASK_USER_GUIDE,
-                          CLASSIFY_SYSTEM, EMOTION_SUPPORT)
+                          CLASSIFY_SYSTEM, EMOTION_SUPPORT, wrap_untrusted)
 from core.tools.base import ToolRegistry, ToolResult
 from core.tools.web_search import WebSearchTool
 from core.tools.web_fetch import WebFetchTool
@@ -571,7 +571,10 @@ class JobAgent:
             # 综合报告阶段同样需要它作为历史上下文。
             "history_summary": (session.summary or "")[-800:],
         }
-        material_str = json.dumps(material, ensure_ascii=False)
+        # 综合素材同样含外部内容（任务结论、JD 解析、简历匹配摘要），按不可信内容包裹；
+        # mock 模式的 _mock_synthesize 用 extract_json 解析，包裹后仍是合法 JSON 字符串值
+        material_str = wrap_untrusted(json.dumps(material, ensure_ascii=False),
+                                      source="run_material", limit=20000)
         try:
             if self.cfg.provider == "mock":
                 report = self.llm.chat([{"role": "user", "content": material_str}], purpose="synthesize")
@@ -607,16 +610,27 @@ class JobAgent:
 
     # ================= 上下文构造 =================
     def _react_payload(self, session: Session, task: Task, step: int, resume_obs: str = None):
+        # 观察值来自工具（网页抓取/OCR/文档解析），属于**不可信外部内容**：
+        # 必须经 wrap_untrusted 标注来源，否则提示词里的"仅作数据"边界没有结构锚点。
+        def _obs_line(i: int, s: dict) -> str:
+            body = s.get("observation", "")[:200]
+            if not s.get("ok"):
+                return f"[step{i + 1}] {s.get('tool')}: 失败 → {body}"
+            return (f"[step{i + 1}] {s.get('tool')}: 成功 → "
+                    + wrap_untrusted(body, source=f"tool:{s.get('tool')}", limit=600))
         transcript = "\n".join(
-            f"[step{i + 1}] {s.get('tool')}: {'成功 → ' + s.get('observation', '')[:200] if s.get('ok') else '失败 → ' + s.get('observation', '')[:200]}"
-            for i, s in enumerate(task.steps)) or "（尚无步骤）"
+            _obs_line(i, s) for i, s in enumerate(task.steps)) or "（尚无步骤）"
         if resume_obs:
-            transcript += f"\n[用户补充] {resume_obs[:500]}"
+            transcript += "\n[用户补充] " + wrap_untrusted(resume_obs[:500], source="user_reply",
+                                                           limit=800)
         body = {
             "step": step, "task": {"id": task.id, "title": task.title, "detail": task.detail,
                                    "tool_hint": task.tool, "args_hint": task.args},
             "facts": {k: v for k, v in session.facts.items() if not str(k).startswith("_")},
-            "artifacts_brief": self._compact_artifacts(session, limit=800),
+            # 产物可能整段来自用户材料（JD 正文/简历文本），同样按不可信内容包裹
+            "artifacts_brief": wrap_untrusted(
+                json.dumps(self._compact_artifacts(session, limit=800), ensure_ascii=False),
+                source="artifacts", limit=4000),
             # 改动：memory.compact() 会把超限的早期对话滚动摘要进 session.summary，
             # 但原先没有任何地方读取它——等于历史上下文被静默丢弃（还白付一次摘要 LLM 调用）。
             # 这里把摘要（截断后）注入执行器上下文，恢复压缩的本来意图。

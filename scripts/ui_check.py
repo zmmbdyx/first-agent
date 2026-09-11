@@ -21,6 +21,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -272,8 +273,55 @@ def main() -> int:
         after = page.evaluate("localStorage.getItem('pf.preset')")
         check("预设下拉可切换并持久化", changed and after != before, f"{before} → {after}")
 
-        # ---------------- 6. 收尾 ----------------
-        print("== 6. 交互后清理 ==")
+        # ---------------- 6. 访问令牌与反馈条（本轮加固新增） ----------------
+        print("== 6. 访问令牌与反馈条 ==")
+        page.click('aside [aria-label="设置"]')
+        page.wait_for_timeout(600)
+        modal = page.locator('[role="dialog"]')
+        page.get_by_role("button", name="通用设置").first.click()
+        page.wait_for_timeout(400)
+        token_input = modal.locator('[aria-label="访问令牌"]')
+        check("设置内有访问令牌输入框", token_input.count() > 0)
+        if token_input.count():
+            token_input.fill("ui-check-token")
+            token_input.blur()
+            page.wait_for_timeout(500)
+            stored = page.evaluate("localStorage.getItem('pf.token')")
+            check("令牌写入 localStorage", stored == "ui-check-token", repr(stored))
+            token_input.fill("")
+            token_input.blur()
+            page.wait_for_timeout(500)
+            check("清空令牌后回落为匿名",
+                  not page.evaluate("localStorage.getItem('pf.token')"),
+                  repr(page.evaluate("localStorage.getItem('pf.token')")))
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(400)
+
+        # 反馈条只在最后一条 assistant 消息下渲染，因此需要真的跑完一次任务
+        textarea = page.locator("textarea").first
+        textarea.click()
+        page.fill("textarea", "帮我分析 data/jds/jd03_数据分析师.txt")
+        page.click('[aria-label="发送"]')
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            if page.query_selector('[aria-label="发送"]') and \
+                    not page.query_selector('[aria-label="停止执行"]'):
+                break
+            page.wait_for_timeout(1_000)
+        page.wait_for_timeout(1_500)
+        stars = page.locator('[aria-label="评 5 分"]')
+        check("运行结束后出现反馈条", stars.count() > 0, f"{stars.count()} 个五星按钮")
+        if stars.count():
+            with page.expect_response(lambda r: "/feedback" in r.url and r.request.method == "POST") as info:
+                stars.first.click()
+            check("提交评分发出 POST 并成功", info.value.ok, str(info.value.status))
+            page.wait_for_timeout(800)
+            check("提交后显示已记录",
+                  page.locator("text=已记录").count() > 0
+                  or page.locator('[aria-label="评 5 分"]').count() > 0)
+
+        # ---------------- 7. 收尾 ----------------
+        print("== 7. 交互后清理 ==")
         if not args.keep:
             row = page.get_by_text(renamed, exact=True).first.locator(
                 'xpath=ancestor::div[contains(@class,"group")][1]')

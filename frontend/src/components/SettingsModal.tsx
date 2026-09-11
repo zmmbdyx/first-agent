@@ -9,9 +9,10 @@
  * - 主题、布局偏好、权限模式默认值**直接读写全局 store**（store 内部负责落 localStorage），
  *   弹窗不维护影子状态，避免两处状态不一致。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError, api, useHealth, useModels, usePresets, useRegisterTool, useTools, useUnregisterTool, useWorkspaces } from '@/api/client'
 import { IconCheck, IconPlus, IconTrash, IconX } from '@/components/icons'
+import { getToken, setToken } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/useAppStore'
 import type { HealthServiceState, PermissionMode, PresetId, ToolInfo } from '@/types'
@@ -95,6 +96,65 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="pf-label">{label}</span>
       {children}
     </label>
+  )
+}
+
+/**
+ * 访问令牌（契约 HARDENING §7）：密码框 + 失焦即存 + 「保存」按钮给出轻量回执。
+ *
+ * 为什么不复用组件外的全局状态：令牌的唯一真相是 localStorage['pf.token']，
+ * lib/auth 是它的唯一读写口；这里用局部 state 只是「输入框草稿」，
+ * 落盘后不再有第二份副本，避免和 lib/auth 的取值分叉。
+ * 提示一律走按钮文案（短暂变「已保存」），不用 alert，不打断设置流程。
+ */
+function TokenRow() {
+  const [value, setValue] = useState(() => getToken())
+  const [saved, setSaved] = useState(false)
+  const savedTimer = useRef<number | null>(null)
+
+  // 卸载时清定时器：设置弹窗关闭即卸载，避免对已卸载组件 setState
+  useEffect(() => () => {
+    if (savedTimer.current !== null) window.clearTimeout(savedTimer.current)
+  }, [])
+
+  const persist = () => {
+    setToken(value)
+    setValue(getToken()) // 回读一次：trim/清除的最终结果以存储为准
+    setSaved(true)
+    if (savedTimer.current !== null) window.clearTimeout(savedTimer.current)
+    savedTimer.current = window.setTimeout(() => setSaved(false), 1600)
+  }
+
+  const filled = value.trim().length > 0
+
+  return (
+    <section className="flex flex-col gap-1.5">
+      <p className="pf-label">访问令牌</p>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="password"
+          className="pf-input min-w-0 flex-1 font-mono"
+          value={value}
+          placeholder="留空表示不携带凭据"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label="访问令牌"
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={persist}
+        />
+        <button
+          type="button"
+          className={cn('pf-btn shrink-0', saved && 'border-pf-border-strong bg-pf-surface text-pf-text')}
+          onClick={persist}
+        >
+          {saved ? '已保存' : '保存'}
+        </button>
+      </div>
+      <p className="text-2xs text-pf-faint">
+        后端开启 AUTH_ENABLED 时必填；仅存于本机 localStorage，不会上传。
+      </p>
+      {filled && <p className="text-2xs text-pf-faint">当前已配置令牌，所有请求自动携带 Bearer 凭据。</p>}
+    </section>
   )
 }
 
@@ -267,6 +327,8 @@ function GeneralTab() {
           {current ? ` · 文件 ${current.file_count} · ${current.exists ? '存在' : '缺失'}` : ''}
         </p>
       </section>
+
+      <TokenRow />
 
       <section className="flex flex-col gap-1.5">
         <p className="pf-label">后端连接状态</p>

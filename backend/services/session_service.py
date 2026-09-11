@@ -19,8 +19,8 @@ from typing import Any, List, Optional, Tuple
 from sqlalchemy import func, or_, select
 
 from config import load_config
-from models import (Message, Run, Session as SessionRow, Task as TaskRow, ToolCall,
-                    TrajectoryNode)
+from models import (Feedback as FeedbackRow, Message, Run, Session as SessionRow,
+                    Task as TaskRow, ToolCall, TrajectoryNode)
 from models.base import gen_id, iso, utcnow
 
 # facts 中保存运行态信息的保留键前缀（core.agent 会过滤掉所有 _ 前缀键）
@@ -67,14 +67,27 @@ class SessionService:
         self.cfg = cfg or load_config()
 
     # ================= 会话 CRUD =================
+    # 归属者（owner）约定：None = 不做归属过滤（内部调用/测试/未开鉴权时的兼容路径）；
+    # 传入具体 owner 时，读操作把"别人的会话"当作**不存在**（返回 None/404），
+    # 而不是 403——避免通过状态码差异探测出他人会话 ID 是否存在。
+    @staticmethod
+    def _owned(stmt, owner: Optional[str]):
+        return stmt.where(SessionRow.owner == owner) if owner else stmt
+
+    @staticmethod
+    def _row_owned(row, owner: Optional[str]):
+        return row is not None and (not owner or (row.owner or "default") == owner)
+
     def create(self, title: str = "", workspace: str = "default", preset: str = "standard",
-               db=None, permission_mode: str = "workspace_write", model: str = "") -> dict:
+               db=None, permission_mode: str = "workspace_write", model: str = "",
+               owner: str = "default") -> dict:
         from db import SessionLocal
         own = db is None
         db = db or SessionLocal()
         try:
             row = SessionRow(
                 id=gen_id(), title=(title or "新会话")[:200], status="idle",
+                owner=(owner or "default")[:64],
                 workspace=workspace or "default", preset=preset or "standard",
                 permission_mode=permission_mode or "workspace_write",
                 model=model or self._default_model(), pinned=False,
@@ -88,13 +101,14 @@ class SessionService:
                 db.close()
 
     def list(self, workspace: Optional[str] = None, limit: int = 50, offset: int = 0,
-             q: Optional[str] = None, db=None) -> Tuple[List[dict], int]:
+             q: Optional[str] = None, db=None,
+             owner: Optional[str] = None) -> Tuple[List[dict], int]:
         from db import SessionLocal
         own = db is None
         db = db or SessionLocal()
         try:
             self._import_legacy(db)
-            stmt = select(SessionRow)
+            stmt = self._owned(select(SessionRow), owner)
             if workspace:
                 stmt = stmt.where(SessionRow.workspace == workspace)
             if q:
@@ -110,34 +124,36 @@ class SessionService:
             if own:
                 db.close()
 
-    def get(self, session_id: str, db=None) -> Optional[dict]:
+    def get(self, session_id: str, db=None, owner: Optional[str] = None) -> Optional[dict]:
         from db import SessionLocal
         own = db is None
         db = db or SessionLocal()
         try:
             row = db.get(SessionRow, session_id)
-            if row is None:  # 旧版存档：先导入再取一次
+            if not self._row_owned(row, owner):   # 旧版存档：先导入再取一次
                 self._import_legacy(db)
                 row = db.get(SessionRow, session_id)
-            return _row_to_dict(row) if row else None
+            return _row_to_dict(row) if self._row_owned(row, owner) else None
         finally:
             if own:
                 db.close()
 
-    def rename(self, session_id: str, title: str, db=None) -> Optional[dict]:
-        return self._patch(session_id, db, title=((title or "")[:200] or None))
+    def rename(self, session_id: str, title: str, db=None,
+               owner: Optional[str] = None) -> Optional[dict]:
+        return self._patch(session_id, db, owner=owner, title=((title or "")[:200] or None))
 
-    def set_pinned(self, session_id: str, pinned: bool, db=None) -> Optional[dict]:
-        return self._patch(session_id, db, pinned=bool(pinned))
+    def set_pinned(self, session_id: str, pinned: bool, db=None,
+                   owner: Optional[str] = None) -> Optional[dict]:
+        return self._patch(session_id, db, owner=owner, pinned=bool(pinned))
 
-    def _patch(self, session_id: str, db, **fields) -> Optional[dict]:
+    def _patch(self, session_id: str, db, owner: Optional[str] = None, **fields) -> Optional[dict]:
         """会话字段更新：updated_at 由服务层显式维护（契约要求列表按其倒序）。"""
         from db import SessionLocal
         own = db is None
         db = db or SessionLocal()
         try:
             row = db.get(SessionRow, session_id)
-            if row is None:
+            if not self._row_owned(row, owner):
                 return None
             for k, v in fields.items():
                 if v is not None:
@@ -149,15 +165,15 @@ class SessionService:
             if own:
                 db.close()
 
-    def delete(self, session_id: str, db=None) -> bool:
+    def delete(self, session_id: str, db=None, owner: Optional[str] = None) -> bool:
         from db import SessionLocal
         own = db is None
         db = db or SessionLocal()
         try:
             row = db.get(SessionRow, session_id)
-            if row is None:
+            if not self._row_owned(row, owner):
                 return False
-            for model in (Message, TaskRow, ToolCall, TrajectoryNode):
+            for model in (Message, TaskRow, ToolCall, TrajectoryNode, FeedbackRow):
                 for r in db.scalars(select(model).where(model.session_id == session_id)).all():
                     db.delete(r)
             for r in db.scalars(select(Run).where(Run.session_id == session_id)).all():
@@ -170,15 +186,84 @@ class SessionService:
             if own:
                 db.close()
 
+    # ================= 用户反馈（评审 P1-4 反馈闭环） =================
+    def add_feedback(self, session_id: str, rating: int = 0, comment: str = "",
+                     run_id: str = "", message_ts: float = 0.0, db=None,
+                     owner: str = "default") -> Optional[dict]:
+        """写入一条反馈。会话不存在或不属于本 owner 时返回 None（对调用方即 404）。"""
+        from db import SessionLocal
+        own = db is None
+        db = db or SessionLocal()
+        try:
+            row = db.get(SessionRow, session_id)
+            if not self._row_owned(row, owner):
+                return None
+            item = FeedbackRow(id=gen_id(), session_id=session_id,
+                               run_id=(run_id or "")[:32], owner=(owner or "default")[:64],
+                               rating=max(0, min(int(rating or 0), 5)),
+                               comment=(comment or "")[:2000],
+                               message_ts=float(message_ts or 0.0), created_at=utcnow())
+            db.add(item)
+            db.commit()
+            return {"id": item.id, "session_id": item.session_id, "run_id": item.run_id,
+                    "rating": item.rating, "comment": item.comment,
+                    "message_ts": float(item.message_ts or 0.0),
+                    "created_at": iso(item.created_at)}
+        finally:
+            if own:
+                db.close()
+
+    def list_feedback(self, session_id: str, db=None,
+                      owner: Optional[str] = None) -> List[dict]:
+        from db import SessionLocal
+        own = db is None
+        db = db or SessionLocal()
+        try:
+            row = db.get(SessionRow, session_id)
+            if not self._row_owned(row, owner):
+                return []
+            stmt = select(FeedbackRow).where(FeedbackRow.session_id == session_id)
+            stmt = self._owned_feedback(stmt, owner)
+            rows = db.scalars(stmt.order_by(FeedbackRow.created_at.asc())).all()
+            return [{"id": f.id, "session_id": f.session_id, "run_id": f.run_id or "",
+                     "rating": int(f.rating or 0), "comment": f.comment or "",
+                     "message_ts": float(f.message_ts or 0.0),
+                     "created_at": iso(f.created_at)} for f in rows]
+        finally:
+            if own:
+                db.close()
+
+    @staticmethod
+    def _owned_feedback(stmt, owner: Optional[str]):
+        return stmt.where(FeedbackRow.owner == owner) if owner else stmt
+
+    def feedback_summary(self, db=None) -> dict:
+        """全局反馈概览：供质量看板使用（平均分、样本数、各分值分布）。"""
+        from db import SessionLocal
+        own = db is None
+        db = db or SessionLocal()
+        try:
+            rows = db.scalars(select(FeedbackRow).where(FeedbackRow.rating > 0)).all()
+            scores = [int(r.rating) for r in rows]
+            dist: dict = {}
+            for s in scores:
+                dist[str(s)] = dist.get(str(s), 0) + 1
+            return {"count": len(scores),
+                    "average": round(sum(scores) / len(scores), 3) if scores else 0.0,
+                    "distribution": dist}
+        finally:
+            if own:
+                db.close()
+
     # ================= 历史聚合 =================
-    def history(self, session_id: str, db=None) -> Optional[dict]:
+    def history(self, session_id: str, db=None, owner: Optional[str] = None) -> Optional[dict]:
         from db import SessionLocal
         own = db is None
         db = db or SessionLocal()
         try:
             self._import_legacy(db)
             row = db.get(SessionRow, session_id)
-            if row is None:
+            if not self._row_owned(row, owner):
                 return None
             messages = db.scalars(select(Message).where(Message.session_id == session_id)
                                   .order_by(Message.ts.asc(), Message.id.asc())).all()
@@ -232,12 +317,14 @@ class SessionService:
     # ================= 运行态搬运 =================
     def create_run(self, session_id: str, task: str = "", preset: str = "standard",
                    workspace: str = "default", permission_mode: str = "workspace_write",
-                   model: str = "", run_id: str = "", db=None) -> dict:
+                   model: str = "", run_id: str = "", db=None,
+                   owner: str = "default", prompt_version: str = "") -> dict:
         """登记一次运行。
 
         `run_id` 必须由调用方（RunService）传入它在事件里使用的那个 ID，
         否则登记行与 SSE 事件中的 run_id 对不上，`/api/agent/runs/{id}` 与
         收尾统计都会写进一条谁也不认识的孤立记录。
+        `owner` / `prompt_version` 用于租户隔离与质量回归归因。
         """
         from db import SessionLocal
         own = db is None
@@ -249,6 +336,8 @@ class SessionService:
                 run = Run(id=rid, started_at=utcnow())
                 db.add(run)
             run.session_id = session_id
+            run.owner = (owner or "default")[:64]
+            run.prompt_version = (prompt_version or "")[:32]
             run.task = (task or "")[:20000]
             run.preset, run.workspace = preset, workspace
             run.permission_mode = permission_mode
@@ -459,10 +548,10 @@ class SessionService:
             if own:
                 db.close()
 
-    def load_runtime(self, session_id: str, db=None):
+    def load_runtime(self, session_id: str, db=None, owner: Optional[str] = None):
         """落库数据 → core.memory.Session（供 RunService/图编排续跑）。"""
         from core.memory import Session, Task
-        data = self.history(session_id, db)
+        data = self.history(session_id, db, owner=owner)
         if data is None:
             return None
         s = Session(id=session_id)

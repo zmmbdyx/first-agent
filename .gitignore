@@ -1,4 +1,12 @@
 # ============================================================================
+# 拓径 PATHFORGE — Git 忽略规则
+# 技术栈：Python(FastAPI) + Node(React/Vite) + Docker + SQLite/PostgreSQL + ChromaDB
+#
+# 原则：凡是「本机产物 / 运行时数据 / 凭据」一律不入库；
+#       凡是「他人 clone 后需要立刻可用」的模板与样例保留（见文件末尾白名单）。
+# ============================================================================
+
+# ============================================================================
 # 密钥与本地配置 —— 永远不要提交
 # ============================================================================
 .env
@@ -6,52 +14,141 @@
 !.env.example
 *.env
 !.env.example
-data/.key
+.env.local
+.envrc
 *.pem
 *.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+secrets/
+.secrets/
+# 本地数据加密密钥（core/secure_store.py 首次运行自动生成）
+data/.key
 
 # ============================================================================
 # Python
 # ============================================================================
 __pycache__/
 *.py[cod]
+*$py.class
 *.pyo
 *.pyd
 .Python
 build/
+develop-eggs/
 dist/
-*.egg-info/
+downloads/
+eggs/
 .eggs/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+MANIFEST
+pip-wheel-metadata/
+
+# 虚拟环境
 .venv/
 venv/
 env/
 ENV/
+.conda/
+.python-version
+
+# 测试 / 质量工具缓存
 .pytest_cache/
 .mypy_cache/
+.dmypy.json
 .ruff_cache/
+.tox/
+.nox/
+.hypothesis/
 htmlcov/
 .coverage
 .coverage.*
+coverage.xml
+nosetests.xml
+*.cover
+.benchmarks/
 
 # ============================================================================
-# Node / 前端
+# Node / 前端（React + Vite + Tailwind）
 # ============================================================================
 node_modules/
 frontend/node_modules/
+jspm_packages/
+web_modules/
+.pnpm-store/
+.yarn/
 frontend/dist/
+frontend/.vite/
+dist/
+dist-ssr/
+build/
+out/
 .vite/
+*.local
 *.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# 包管理器日志
 npm-debug.log*
+yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
 
 # ============================================================================
-# 数据库
+# Docker
+# ============================================================================
+# 构建上下文中的临时/覆盖文件（compose 本地覆盖不入库）
+docker-compose.override.yml
+docker-compose.*.local.yml
+.docker/
+# Docker 卷数据（compose 使用命名卷，若改为绑定挂载则落入此处）
+pgdata/
+redisdata/
+
+# ============================================================================
+# 数据库（SQLite / PostgreSQL 本地数据）
 # ============================================================================
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
+*.sqlite3-journal
 data/*.db
+data/*.sqlite3
+# Alembic / 迁移本地状态
+alembic/versions/__pycache__/
+
+# ============================================================================
+# 向量库（ChromaDB / 本地向量存储）
+# ============================================================================
+chroma_db/
+chroma_db*/
+.chroma/
+data/chroma/
+data/chroma_db/
+data/vectors/
+data/embeddings/
+*.chroma
+chroma.sqlite3
+# 模型缓存（OCR / embedding）
+.cache/
+data/cache/
+*.onnx
+*.safetensors
+*.pt
+*.ckpt
+~/.cache/huggingface/
+models/
 
 # ============================================================================
 # 运行时数据（含用户上传材料与对话记录，涉及隐私 —— 一律不入库）
@@ -60,14 +157,16 @@ data/sessions/
 data/sessions_*/
 data/checkpoints/
 data/uploads/
-data/cache/
-data/vectors/
 data/reports/
 data/test_ocr.png
+data/tmp/
 # 跨会话长期记忆（加密后的用户画像）：属用户数据，运行时自动重建，不入库
 data/profile.json
-uploads/
+# 工作区（Agent 的文件读写沙箱根目录，含内部 .git 仓库）
 workspaces/
+uploads/
+logs/
+*.log
 temp/
 tmp/
 
@@ -77,23 +176,57 @@ data/resumes/*
 !data/resumes/简历_李明_数据分析师.txt
 
 # ============================================================================
-# 日志 / 系统文件 / 编辑器
+# 系统文件 / 编辑器 / IDE
 # ============================================================================
-*.log
-logs/
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
 Thumbs.db
+ehthumbs.db
 desktop.ini
 .idea/
 .vscode/
 *.swp
+*.swo
 *~
+*.sublime-workspace
+*.sublime-project
+.project
+.classpath
 
 # ============================================================================
 # 测试与临时产物
 # ============================================================================
 tmp_*
 *.tmp
+*.temp
+*.bak
 *_check.tmp.*
 *.orig
 *.rej
+*.pid
+*.seed
+screenshots/*.tmp.png
+
+# ============================================================================
+# 内部工作记录（含清理审计细节与脱敏上下文，不对外发布）
+# ============================================================================
+cleanup_plan.md
+
+# ============================================================================
+# 白名单：以下文件必须入库（模板 / 样例 / 核心配置）
+# ============================================================================
+!README.md
+!TUTORIAL.md
+!Dockerfile
+!docker-compose.yml
+!.dockerignore
+!.gitignore
+!.github/
+!docs/
+!backend/.env.example
+!data/jds/
+!data/generate_data.py
+!screenshots/*.png

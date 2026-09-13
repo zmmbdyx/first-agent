@@ -62,19 +62,24 @@ backend/
 │   ├── queue.py             # ▲ 新增：优先级任务队列
 │   ├── metrics.py           # ▲ 新增：Token / TPS / 缓存命中率 / 上下文占用采集
 │   ├── longterm.py          # ▲ 新增：ChromaDB 长期记忆（不可用时降级为本地文件）
-│   ├── redis_memory.py      # ▲ 新增：Redis 短期记忆（不可用时降级为内存 dict）
 │   ├── events.py            # ▲ 新增：事件类型常量 + EventBus 桥接（SSE/WS 共用）
-│   └── legacy/              # 旧单体实现（server.py / cli.py / static/），仅供追溯
+│   └── __init__.py
 ├── models/                  # SQLAlchemy 模型
 ├── schemas/                 # Pydantic 请求/响应模型
 ├── services/                # 业务逻辑层
+├── main.py                  # FastAPI 入口（uvicorn main:app）
+├── cli.py                   # CLI 入口（--serve 时加载 main:app）
+├── config.py  db.py  security.py  observability.py
 ├── .env.example
 ├── requirements.txt
+├── requirements-dev.txt     # 开发/测试依赖（pandas / reportlab / playwright）
 └── README.md
 frontend/
 ├── index.html  package.json  vite.config.ts  tsconfig.json  tailwind.config.js  postcss.config.js
 └── src/{main.tsx,App.tsx,index.css,components/,store/,api/,types/,lib/}
 ```
+
+> 注：v1 单体版本的 `server.py` / `static/` 已完全移除，仓库内不再保留 `legacy/` 目录。
 
 ---
 

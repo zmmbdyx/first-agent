@@ -1,0 +1,21 @@
+# 拓径 PATHFORGE — 开发 / 测试 / 数据生成依赖
+# 安装：pip install -r requirements-dev.txt
+# 已通过 `-r requirements.txt` 包含全部生产依赖，生产镜像请勿安装本文件。
+#
+# 注意：CI 的 backend / postgres 作业会运行 tests/test_smoke.py，
+# 而该脚本在样例简历缺失时会调用 data/generate_data.py 生成 PDF（内部依赖 reportlab），
+# 因此这些作业必须安装本文件，不能只装 requirements.txt。
+
+# ---- 数据库驱动（PostgreSQL 路径，由 requirements-postgres.txt 单独管理） ----
+# 需要时手动追加：-r requirements-postgres.txt
+
+# ---- 测试与评测 ----
+pandas>=2.0                 # tests/batch_eval.py 批量评测与报表聚合
+reportlab>=4.0              # data/generate_data.py 生成样例简历 PDF（被 test_smoke.py 调用）
+
+# ---- 交互层实机校验（CI ui 作业使用） ----
+playwright>=1.40            # scripts/ui_check.py、scripts/capture_screenshots.py
+# 首次使用还需安装浏览器内核：python -m playwright install --with-deps chromium
+
+# ---- 代码质量（可选） ----
+ruff>=0.5

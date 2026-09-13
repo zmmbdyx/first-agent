@@ -1,0 +1,28 @@
+[tool.ruff]
+# 只做「缺陷检测」，不做格式化 / 行长 / 引号风格 ——
+# 本仓库的既有风格（中文注释、紧凑排版）有意保持，全量 style 规则会产生数百条噪音。
+target-version = "py310"
+line-length = 120
+exclude = [
+    ".git", ".venv", "venv", "node_modules", "frontend",
+    "data", "workspaces", "__pycache__", "dist", "build",
+]
+
+[tool.ruff.lint]
+# E9 = 语法级错误（如 IOError 未定义）
+# F  = pyflakes：未定义名称、未使用变量、重复定义、无效 f-string 等真实缺陷
+#
+# 有意不启用：
+#   I  (import 排序) —— 会产出 48 条与既有风格冲突的噪音（如 main.py 中 observability
+#                       有意置于 config 之后以配合 app 初始化顺序），本项目不做强制排序
+#   E501/F401 等风格规则 —— 中文注释与「导入即注册」模式下噪音过大
+select = ["E9", "F"]
+ignore = [
+    "F401",   # 未使用导入：项目大量使用「导入即注册」模式（models/schemas/__init__）
+    "F403",   # star import
+    "F405",   # star import 引入的名称
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 包初始化文件与脚本常做「导入即副作用注册」或条件导入
+"**/__init__.py" = ["F401", "F811"]

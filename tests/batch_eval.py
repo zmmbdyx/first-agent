@@ -119,11 +119,11 @@ def main():
         f"（{'离线mock模板，数据来自真实工具计算' if cfg.provider == 'mock' else '真实大模型'}）",
         f"- 总耗时：{time.time() - t0:.0f}s　|　工具调用：{sum(s['calls'] for s in agent.registry.call_stats.values())} 次"
         f"　|　工具自动重试：{sum(s['retries'] for s in agent.registry.call_stats.values())} 次",
-        f"- 每个JD独立跑完整 Agent 流水线：解析JD → 结构化分析 → 简历匹配评分 → 生成面试题 → 落盘报告",
+        "- 每个JD独立跑完整 Agent 流水线：解析JD → 结构化分析 → 简历匹配评分 → 生成面试题 → 落盘报告",
         "",
         "## 一、总览",
         "",
-        f"![总览](charts/batch_overview.png)",
+        "![总览](charts/batch_overview.png)",
         "",
         "| " + " | ".join(df.columns) + " |",
         "|" + "---|" * len(df.columns),

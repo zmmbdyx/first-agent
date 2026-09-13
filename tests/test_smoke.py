@@ -255,7 +255,6 @@ def main():
                "任职要求：本科及以上学历，2年以上NLP或大模型应用经验，精通Python，"
                "熟悉LangChain框架与向量数据库，了解Prompt工程。")
     agent.handle_message(sE, f"帮我分析这份JD并匹配简历：\n{text_jd}\n简历用 data/resumes/简历_李明_数据分析师.txt")
-    types_e = [e["type"] for e in evtsE]
     plan_e = next((e for e in evtsE if e["type"] == "plan_created"), None)
     first_tools = [t["tool"] for t in (plan_e["tasks"] if plan_e else [])]
     check("纯文本JD不生成读取任务", plan_e is not None and "file_read" not in first_tools,
